@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "gates": [
+    {"name": "deterministic", "argv": ["{python}", "-m", "unittest", "discover", "-s", "tests", "-p", "test_verify.py", "-v"], "timeout_seconds": 60},
+    {"name": "critic", "argv": ["{python}", "-m", "unittest", "discover", "-s", "tests", "-p", "test_adversarial.py", "-v"], "timeout_seconds": 60},
+    {"name": "debloat", "argv": ["{python}", "scripts/check_scope.py"], "timeout_seconds": 30}
+  ]
+}

@@ -1,15 +1,18 @@
 # Measured results
 
-Post-fourth-round validation executed on 2026-10-20, Windows 11 (10.0.26200),
+Post-fifth-round validation executed on 2026-10-20, Windows 11 (10.0.26200),
 Python 3.13.9 (`C:\Users\emper\anaconda3\python.exe`), Git 2.54.0.windows.1.
 All times below are local Asia/Seoul (UTC+09:00), on that date.
 Working directory: `C:\Users\emper\Desktop\everythingyoucan-review-fixes`.
 Code/test commit and debloat baseline:
-`73e2d98f5051467d9c4653774243501fbcf87ec2`;
+`0b51aa10ac7c241e66927de5b835dc089edb9b60`;
 minimum reduction: **0%**. The script's default remains 20%.
-The owner chose to prohibit growth relative to the fourth review-fix commit;
+The owner chose to prohibit growth relative to the fifth review-fix commit;
 the reset includes the safety additions in the baseline and claims no reduction.
 Only configuration and documentation changed in this post-commit update.
+Besides the baseline, the PM raised the critic gate's `timeout_seconds` from
+60 to 120: the suite grew to 54 tests (about 45 seconds here), and both the
+fourth verifier and the fifth-round builder saw it exceed 60 seconds under load.
 Hashes of all four Python files in `scripts/` and `tests/` were identical before
 and after validation.
 
@@ -24,19 +27,24 @@ also remove the variable themselves when exercising the attack.
 
 | Command | Variable in child environment | Start (+09:00) | End (+09:00) | Exit | Tests reported | Passed | Skipped |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `python -m unittest discover -s tests` | `1` | 15:08:50.329 | 15:09:23.145 | 0 | 76 | 75 | 1 |
-| `python -m unittest tests.test_adversarial` | `1` | 15:09:23.380 | 15:09:48.944 | 0 | 47 | 46 | 1 |
-| `python -m unittest discover -s tests` | Removed | 15:09:49.007 | 15:10:19.043 | 0 | 76 | 75 | 1 |
-| `python -m unittest tests.test_adversarial` | Removed | 15:10:19.115 | 15:10:47.380 | 0 | 47 | 46 | 1 |
-| `python scripts/verify.py --config verification.json` | Inherited: `1` | 15:10:47.457 | 15:11:24.268 | 0 | 29 + 47 across two test gates | 75 | 1 |
+| `python -m unittest discover -s tests` | `1` | 20:39:13.061 | 20:40:05.235 | 0 | 83 | 82 | 1 |
+| `python -m unittest tests.test_adversarial` | `1` | 20:40:05.341 | 20:40:50.092 | 0 | 54 | 53 | 1 |
+| `python -m unittest discover -s tests` | Removed | 20:40:50.153 | 20:41:41.499 | 0 | 83 | 82 | 1 |
+| `python -m unittest tests.test_adversarial` | Removed | 20:41:41.563 | 20:42:26.621 | 0 | 54 | 53 | 1 |
+| `python scripts/verify.py --config verification.json` | Inherited: `1` | 20:42:26.885 | 20:43:19.165 | 0 | 29 + 54 across two test gates | 82 | 1 |
 
 Counts include skipped tests, as reported by unittest. The commands rerun
 overlapping tests; their counts are not distinct-test totals. No test failures
 or errors occurred. Raw stdout/stderr, command metadata and a JSON execution
 summary are retained locally in
-`C:\Users\emper\AppData\Local\Temp\claude\C--Users-emper-Desktop-everythingyoucan\768b4c62-288a-45ea-8dea-d4e03c44dfa5\scratchpad\pm-round4-evidence`
+`C:\Users\emper\AppData\Local\Temp\claude\C--Users-emper-Desktop-everythingyoucan\768b4c62-288a-45ea-8dea-d4e03c44dfa5\scratchpad\pm-round5-evidence`
 (`set-discover.txt`, `set-adversarial.txt`, `removed-discover.txt`,
-`removed-adversarial.txt`, `verify.txt`, `repro-utf7.txt`).
+`removed-adversarial.txt`, `verify.txt`, `repro-utf7.txt`, `repro-gitconfig.txt`).
+Both reproduction scripts cloned `0b51aa1`: with 600 statements hidden behind a
+UTF-7 declaration, the configured harness exited 1 with the debloat gate at
+exit 2 and the default-20% counter exited 2, with no Git settings and with local
+`grep.column=true`, `color.ui=always`, `color.grep=always` or global
+`color.ui=always`.
 
 ## Skipped test
 
@@ -55,20 +63,20 @@ skipped for lack of privilege.
 | Gate | Status | Exit | Observed result |
 | --- | --- | --- | --- |
 | deterministic | passed | 0 | 29 tests passed; none skipped |
-| critic | passed | 0 | 47 tests reported: 46 passed, 1 skipped as described above |
-| debloat | passed | 0 | 252 baseline code lines → 252 current code lines; reduction 0.0%, required 0% |
+| critic | passed | 0 | 54 tests reported: 53 passed, 1 skipped as described above |
+| debloat | passed | 0 | 258 baseline code lines → 258 current code lines; reduction 0.0%, required 0% |
 
 The debloat gate actually ran the following command through the current Python
 interpreter; it was not a separate top-level invocation:
 
 ```text
-{python} scripts/check_loc.py --base 73e2d98f5051467d9c4653774243501fbcf87ec2 --min-percent 0
+{python} scripts/check_loc.py --base 0b51aa10ac7c241e66927de5b835dc089edb9b60 --min-percent 0
 ```
 
 Its output was:
 
 ```text
-code lines 252 at 73e2d98f5051467d9c4653774243501fbcf87ec2 -> 252 now; reduction 0.0% (required 0%)
+code lines 258 at 0b51aa10ac7c241e66927de5b835dc089edb9b60 -> 258 now; reduction 0.0% (required 0%)
 ```
 
 The count uses the default `:(icase)*.py` pathspec, excluding `tests/`,
@@ -77,8 +85,8 @@ mixed endings, and extension case variants such as `.PY` are included.
 Removing the earlier `git grep -I` exclusion fixed the binary/`-diff`
 attribute bypass; adding `-a` was not what fixed the omission.
 Non-ignored untracked files count; nested untracked repositories and ignored
-files remain outside the count. Decoding and numeric-conversion failures and non-UTF-8 encoding declarations
-return exit 2, and failed grep calls also print an exit-code diagnostic.
+files remain outside the count. Decoding and numeric-conversion failures, unparsed encoding-header output and
+non-UTF-8 encoding declarations return exit 2, and failed grep calls also print an exit-code diagnostic.
 No code reduction is claimed.
 The generated report is `.artifacts/verification.json`, with overall
 `status: passed`, `human_approval: pending`, and all three gate exit codes 0.

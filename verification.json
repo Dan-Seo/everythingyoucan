@@ -2,7 +2,7 @@
   "version": 1,
   "gates": [
     {"name": "deterministic", "argv": ["{python}", "-m", "unittest", "discover", "-s", "tests", "-p", "test_verify.py", "-v"], "timeout_seconds": 60},
-    {"name": "critic", "argv": ["{python}", "-m", "unittest", "discover", "-s", "tests", "-p", "test_adversarial.py", "-v"], "timeout_seconds": 60},
-    {"name": "debloat", "argv": ["{python}", "scripts/check_loc.py", "--base", "73e2d98f5051467d9c4653774243501fbcf87ec2", "--min-percent", "0"], "timeout_seconds": 30}
+    {"name": "critic", "argv": ["{python}", "-m", "unittest", "discover", "-s", "tests", "-p", "test_adversarial.py", "-v"], "timeout_seconds": 120},
+    {"name": "debloat", "argv": ["{python}", "scripts/check_loc.py", "--base", "0b51aa10ac7c241e66927de5b835dc089edb9b60", "--min-percent", "0"], "timeout_seconds": 30}
   ]
 }

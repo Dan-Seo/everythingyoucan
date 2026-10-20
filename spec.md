@@ -32,7 +32,9 @@ instructions; this tool is not a sandbox or a security policy.
 ## Behavior and output schema
 
 Commands run sequentially from the repository root with `shell=False`. A bare
-argv[0] (no directory part) is located on PATH. On Windows, only absolute PATH
+argv[0] (no directory part) is located on PATH. Relative executable paths with
+a directory part are resolved against the repository root, not the caller's
+working directory. On Windows, only absolute PATH
 entries and PATHEXT candidates are searched; the current directory is not
 implicitly searched. Internal Git commands in both `verify.py` and
 `check_loc.py`, and Git calls in the tests, use the same lookup. Windows can
@@ -40,7 +42,10 @@ implicitly invoke cmd.exe for `.cmd` and `.bat` files even with `shell=False`;
 such commands are rejected with `launch_error` if their resolved executable
 path or any argument contains `&`, `|`, `<`, `>`, `^`, `(`, `)`, `%`, `!`, `"`,
 or a control character below U+0020. Batch commands requiring those characters
-are intentionally unsupported. The resolved batch executable path is always
+are intentionally unsupported. Batch paths ending in a dot (after trailing
+spaces are stripped) or starting with `\\?\` are also rejected before launch
+with `launch_error`. Batch extension matching is case-insensitive, including
+uppercase PATHEXT results such as `tool.CMD`. The resolved batch executable path is always
 double-quoted, even without spaces, so cmd.exe cannot split it on delimiters
 such as `,`, `;`, `=` or U+00A0. The first
 nonzero exit, timeout or launch failure stops execution. Output is inherited by
@@ -70,6 +75,9 @@ No timestamps or runtime values required: deterministic report structure.
 ## Edges and boundaries
 
 - Missing executable, negative return codes, invalid UTF-8 and invalid numbers.
+- Repository Python modules are trusted too: a root-level `unittest.py` can
+  shadow the standard library when a gate runs `python -m unittest`.
+  Executable PATH protections do not isolate Python imports.
 - Timeout cleanup terminates and reaps the direct child. Descendants are NOT
   contained or guaranteed terminated on all platforms. Do not run untrusted or
   daemonizing commands. This explicit portable limit is preferable to a false
@@ -91,22 +99,30 @@ No timestamps or runtime values required: deterministic report structure.
    run both commands with `NoDefaultCurrentDirectoryInExePath` removed from
    the child environment. Hijacking regressions remove this variable themselves.
 2. `python scripts/verify.py --config verification.json` must exit 0 with all
-   gates passing. The debloat baseline is the PM's second review-fix commit
-   `912dd6af7e4a298a356eab47c65fe243244e88c8`, with a 0% minimum reduction.
+   gates passing. The debloat baseline is the PM's third review-fix commit
+   `5e4471e9dc4a1d2d3559868abb151b3313c4c697`, with a 0% minimum reduction.
 3. Tests cover malformed/oversized schema, duplicate keys, booleans/nonfinite
    timeouts, gate ordering, success/failure ordering, timeout and launch failure,
    human approval invariant, atomic report output and protected output targets,
    Windows path aliases, safe executable lookup, quoted batch paths,
    batch-command rejection, symlinks, post-gate path rechecks, untracked code,
-   zero-line baselines, binary report prefixes and Git execution errors.
+   zero-line baselines, binary report prefixes, LF/CRLF/CR-only line endings,
+   case-insensitive Python extensions, repository-relative executables,
+   unsupported batch paths and Git execution/output-parsing errors.
 4. Critic cases are committed tests, not an assertion that all bugs are absent.
 5. The debloat gate runs `scripts/check_loc.py --base <ref>`: code lines (blank
-   and `#`-only lines excluded) in the configured git pathspecs, default `*.py`
+   and `#`-only lines excluded) in the configured git pathspecs, default `:(icase)*.py`
    outside `tests/`, must shrink by `--min-percent` (default 20) versus the base
-   commit. `git grep -a` counts matching files regardless of binary/`-diff`
-   attributes; `--untracked` includes non-ignored untracked files. A missing or
+   commit. LF, CRLF and CR-only line endings are counted, including mixed
+   endings, and the default matches `.py` regardless of extension case.
+   Removing the earlier `git grep -I` binary-file exclusion fixed the
+   `.gitattributes` bypass; adding `-a` was not what fixed that omission.
+   `--untracked` includes non-ignored untracked files, but nested untracked
+   repositories, ignored files and excluded paths remain outside the count. A missing or
    invalid base, zero code lines at the base, or a Git execution, timeout or
-   output-decoding error fails with exit 2. Debloat review still records actual simplifications; no reduction
+   output-parsing error (including decoding and numeric conversion) fails with
+   exit 2. A failed grep emits a diagnostic with its exit code.
+   Debloat review still records actual simplifications; no reduction
    may weaken validation or tests to hit a quota.
 6. Original instruction and active hook files stay unchanged.
 
@@ -149,16 +165,16 @@ decisions replace the Phase 1 reverse interview for this round.
 - No debloating pass has happened yet; safety fixes increased code lines
   from 161 in the original baseline to 215 in the first review-fix commit.
   This repository alone starts with `--min-percent 0`: unchanged or reduced
-  code passes, growth fails. After the independent verifier's first FAIL,
-  stage 3 repins the baseline to the second review-fix commit
-  `912dd6af7e4a298a356eab47c65fe243244e88c8`. The owner chose to prohibit
+  code passes, growth fails. After verifier2 returned PASS-WITH-NOTES on the
+  second-round fixes, the baseline is now the third review-fix commit
+  `5e4471e9dc4a1d2d3559868abb151b3313c4c697`. The owner chose to prohibit
   growth relative to the fix commit, so the safety fixes themselves are included
   in the baseline; this does not claim a reduction against earlier code.
   `check_loc.py` retains its default 20% requirement under CLAUDE.md Gate 3.
   When a real debloating pass starts, use its preceding commit as the base and
   raise this repository's minimum to 20%.
 - Preserve previous fixes and the deletion of the obsolete scope checker.
-  Stage 3 changes only configuration and documentation, not `scripts/` or
+  This post-commit update changes only configuration and documentation, not `scripts/` or
   `tests/`, and updates `docs/RESULTS.md` from actual executions after repinning.
   The PM owns
   commits; `.claude/agents/` and PreToolUse hooks remain outside this work.

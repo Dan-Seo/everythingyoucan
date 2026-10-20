@@ -3,6 +3,6 @@
   "gates": [
     {"name": "deterministic", "argv": ["{python}", "-m", "unittest", "discover", "-s", "tests", "-p", "test_verify.py", "-v"], "timeout_seconds": 60},
     {"name": "critic", "argv": ["{python}", "-m", "unittest", "discover", "-s", "tests", "-p", "test_adversarial.py", "-v"], "timeout_seconds": 60},
-    {"name": "debloat", "argv": ["{python}", "scripts/check_loc.py", "--base", "912dd6af7e4a298a356eab47c65fe243244e88c8", "--min-percent", "0"], "timeout_seconds": 30}
+    {"name": "debloat", "argv": ["{python}", "scripts/check_loc.py", "--base", "5e4471e9dc4a1d2d3559868abb151b3313c4c697", "--min-percent", "0"], "timeout_seconds": 30}
   ]
 }

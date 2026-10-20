@@ -36,8 +36,10 @@ regression is skipped on Windows because Windows filenames cannot contain
 newlines; Windows-specific path and process regressions run there instead.
 
 On Windows use `python` instead of `python3`. Commands in the configuration use
-`{python}` to select the interpreter running the harness. Paths are resolved
-relative to the repository, so invoking the script from another directory works.
+`{python}` to select the interpreter running the harness. Configuration/report
+paths and relative executable paths with a directory part (such as
+`bin/tool.exe`) are resolved against the repository root. Bare executable names
+are searched on PATH; commands also run with the repository root as their cwd.
 
 The runner stops after the first failed gate. Exit codes are 0 for all commands
 passing, 1 for a gate failure, and 2 for invalid configuration/report I/O. Output
@@ -68,20 +70,26 @@ current process exit and actual output, not merely the presence of a report.
 This repository starts with `--min-percent 0`, which rejects code growth and
 allows unchanged or reduced code. No debloating pass has happened yet: safety
 fixes increased the measured count from 161 to 215 code lines in the first
-review-fix commit and grew further in the second, so a 20% reduction
+review-fix commit and grew further in later fixes, so a 20% reduction
 requirement is premature. `check_loc.py` still defaults to 20% as required by
 CLAUDE.md Gate 3. When a real debloating pass starts, set this repository's
 minimum to 20% and compare against the commit before that pass.
 
-The baseline is repinned to the PM's second review-fix commit
-`912dd6af7e4a298a356eab47c65fe243244e88c8`, with `--min-percent 0`.
+The baseline is repinned to the PM's third review-fix commit
+`5e4471e9dc4a1d2d3559868abb151b3313c4c697`, with `--min-percent 0`.
 This follows the owner's decision to prohibit growth relative to the fix commit,
 including the safety fixes in the baseline rather than claiming they reduced code.
 All three gates must pass for unchanged code. `docs/RESULTS.md` records the
-actual stage 3 executions after repinning this baseline.
-The counter uses `git grep -a` so `.gitattributes` binary/`-diff` flags cannot
-hide matching files; non-ignored untracked Python files also count.
-Git execution, timeout and output-decoding errors exit with code 2.
+actual executions after repinning this baseline.
+The counter counts LF, CRLF and CR-only line endings, including mixed endings.
+Its default `:(icase)*.py` pathspec includes `.PY` and other case variants,
+excluding `tests/`. Blank and `#`-only lines are excluded.
+Removing the earlier `git grep -I` exclusion fixed the `.gitattributes`
+binary/`-diff` bypass; adding `-a` was not what fixed that omission.
+Non-ignored untracked Python files count, but nested untracked repositories,
+ignored files and excluded paths do not. Git execution, timeout and
+output-parsing errors (including decoding and numeric conversion) exit with
+code 2; grep failures also print a diagnostic containing the exit code.
 
 ## Trust boundaries
 
@@ -89,6 +97,9 @@ Review every config before running it. Its argv arrays are executable
 instructions with your account's permissions. `shell=False` prevents incidental
 shell parsing; it does not make a command safe. No command denylist, sandbox,
 credential protection or network isolation is implemented by this runner.
+Repository Python modules are also trusted: a root-level `unittest.py` can
+shadow the standard library in a `python -m unittest` gate. Safe executable
+lookup does not isolate Python imports.
 
 Timeout handling terminates and reaps the direct child. It does NOT guarantee
 portable cleanup of descendant processes. Do not use untrusted, daemonizing or
@@ -113,9 +124,13 @@ directory. Windows can still launch batch files through cmd.exe with
 `shell=False`, so the runner rejects unsafe batch paths and arguments. It always
 double-quotes the resolved batch path, including paths without spaces, to prevent
 splitting on delimiters such as `,`, `;`, `=` and U+00A0.
+Batch paths ending in a dot (after trailing spaces are stripped) or beginning
+with `\\?\` are rejected before execution with `launch_error`. Case-insensitive
+extension checks also protect uppercase PATHEXT results such as `tool.CMD`.
 Hijacking tests remove `NoDefaultCurrentDirectoryInExePath` from the environment
 used for the attack so an OS lookup restriction cannot mask a regression.
-Stage 3 records both unittest commands with the variable set to `1` and removed.
+`docs/RESULTS.md` records both unittest commands with the variable set to `1`
+and removed.
 
 The original `.claude/settings.json` refers to a machine-specific Windows hook.
 It has been deliberately preserved, not repaired, disabled or replaced. This

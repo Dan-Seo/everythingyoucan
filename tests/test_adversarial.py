@@ -65,11 +65,11 @@ class AdversarialTests(unittest.TestCase):
     def test_git_metadata_is_protected(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            subprocess.run(["git", "init", "-q", str(root)], check=True, timeout=10)
+            subprocess.run([verify._command_path("git"), "init", "-q", str(root)], check=True, timeout=10)
             for relative in [".git", ".git/HEAD", ".git/config", ".git/objects/new"]:
                 with self.subTest(path=relative), self.assertRaises(ValueError):
                     verify.checked_report_path(root / relative, root, root / "config.json")
-            result = subprocess.run(["git", "status", "--porcelain"], cwd=root,
+            result = subprocess.run([verify._command_path("git"), "status", "--porcelain"], cwd=root,
                                     capture_output=True, timeout=10)
             self.assertEqual(result.returncode, 0)
 
@@ -90,7 +90,7 @@ class AdversarialTests(unittest.TestCase):
             root = Path(directory) / "repo\nnewline"
             worktree = Path(directory) / "worktree"
             def git(*args, cwd=None):
-                return subprocess.run(["git", *args], cwd=cwd, check=True,
+                return subprocess.run([verify._command_path("git"), *args], cwd=cwd, check=True,
                                       capture_output=True, timeout=15)
             git("init", "-q", str(root))
             git("-c", "user.name=Test", "-c", "user.email=test@example.invalid",
@@ -114,7 +114,7 @@ class AdversarialTests(unittest.TestCase):
     def test_existing_untracked_and_ignored_files_are_protected(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            subprocess.run(["git", "init", "-q", str(root)], check=True, timeout=10)
+            subprocess.run([verify._command_path("git"), "init", "-q", str(root)], check=True, timeout=10)
             (root / ".gitignore").write_text(".env\n")
             for name in [".env", "untracked.txt"]:
                 (root / name).write_text("keep")
@@ -125,10 +125,27 @@ class AdversarialTests(unittest.TestCase):
     def test_previous_report_may_be_rewritten(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory); report = root / "out" / "report.json"
-            subprocess.run(["git", "init", "-q", str(root)], check=True, timeout=10)
+            subprocess.run([verify._command_path("git"), "init", "-q", str(root)], check=True, timeout=10)
             verify.write_report(report, verify.run_gates(config(), root))
             self.assertEqual(verify.checked_report_path(report, root, root / "config.json"),
                              report)
+
+    def test_crlf_prefix_cannot_masquerade_as_previous_report(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); report = root / "notes.txt"
+            subprocess.run([verify._command_path("git"), "init", "-q", str(root)],
+                           check=True, timeout=10)
+            original = b'{\r\n  "version": 1,\r\n  "status": "keep"}\r\n'
+            report.write_bytes(original)
+            with self.assertRaisesRegex(ValueError, "existing non-report"):
+                verify.checked_report_path(report, root, root / "config.json")
+            self.assertEqual(report.read_bytes(), original)
+
+    def test_report_writer_uses_literal_lf_prefix(self):
+        with tempfile.TemporaryDirectory() as directory:
+            report = Path(directory) / "report.json"
+            verify.write_report(report, {"version": 1, "status": "passed"})
+            self.assertTrue(report.read_bytes().startswith(b'{\n  "version": 1,\n  "status": "'))
 
     def test_nan_report_does_not_replace_old_report(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -136,6 +153,80 @@ class AdversarialTests(unittest.TestCase):
             with self.assertRaises(ValueError): verify.write_report(path, {"x": float("nan")})
             self.assertEqual(path.read_text(), "old")
             self.assertEqual(list(path.parent.iterdir()), [path])
+
+
+class LineCountAdversarialTests(unittest.TestCase):
+    SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "check_loc.py"
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory(); self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        self.git("init", "-q")
+        (self.root / "a.py").write_text("x = 1\n" * 100)
+        self.git("add", ".")
+        self.git("-c", "user.name=T", "-c", "user.email=t@example.invalid",
+                 "commit", "-q", "-m", "base")
+
+    def git(self, *args):
+        return subprocess.run([verify._command_path("git"), *args], cwd=self.root,
+                              check=True, capture_output=True, timeout=15)
+
+    def test_gitattributes_cannot_hide_added_code(self):
+        (self.root / "bloat.py").write_text("y = 2\n" * 500)
+        for attribute in ("-diff", "binary"):
+            (self.root / ".gitattributes").write_text("bloat.py " + attribute + "\n")
+            with self.subTest(attribute=attribute):
+                result = subprocess.run([sys.executable, str(self.SCRIPT), "--base", "HEAD",
+                                         "--min-percent", "0"], cwd=self.root,
+                                        capture_output=True, timeout=15)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn(b"-> 600 now", result.stdout)
+
+    def test_gitattributes_cannot_hide_base_code(self):
+        (self.root / ".gitattributes").write_text("*.py -diff\n")
+        self.git("add", ".gitattributes")
+        self.git("-c", "user.name=T", "-c", "user.email=t@example.invalid",
+                 "commit", "-q", "-m", "binary attributes")
+        result = subprocess.run([sys.executable, str(self.SCRIPT), "--base", "HEAD",
+                                 "--min-percent", "0"], cwd=self.root,
+                                capture_output=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(b"code lines 100 at HEAD -> 100 now", result.stdout)
+
+    def test_non_utf8_git_output_is_execution_error(self):
+        bindir = self.root / "bin"; bindir.mkdir()
+        if sys.platform == "win32":
+            (bindir / "raw.bin").write_bytes(b"\xff")
+            (bindir / "git.cmd").write_text('@type "%~dp0raw.bin"\n')
+        else:
+            tool = bindir / "git"
+            tool.write_text("#!/bin/sh\nprintf '\\377'\n")
+            tool.chmod(0o755)
+        env = dict(os.environ, PATH=str(bindir), PATHEXT=".CMD")
+        result = subprocess.run([sys.executable, str(self.SCRIPT), "--base", "HEAD"],
+                                cwd=self.root, env=env, capture_output=True, timeout=15)
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertNotIn(b"Traceback", result.stderr)
+        self.assertNotIn(b"Exception in thread", result.stderr)
+
+    def test_missing_git_is_execution_error(self):
+        bindir = self.root / "empty-bin"; bindir.mkdir()
+        env = dict(os.environ, PATH=str(bindir))
+        result = subprocess.run([sys.executable, str(self.SCRIPT), "--base", "HEAD"],
+                                cwd=self.root, env=env, capture_output=True, timeout=15)
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertNotIn(b"Traceback", result.stderr)
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows executable lookup")
+    def test_check_loc_git_ignores_caller_cwd(self):
+        shutil.copyfile(Path(os.environ["SystemRoot"]) / "System32" / "where.exe",
+                        self.root / "git.exe")
+        env = {k: v for k, v in os.environ.items()
+               if k.upper() != "NODEFAULTCURRENTDIRECTORYINEXEPATH"}
+        result = subprocess.run([sys.executable, str(self.SCRIPT), "--base", "HEAD",
+                                 "--min-percent", "0"], cwd=self.root, env=env,
+                                capture_output=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 @unittest.skipUnless(sys.platform == "win32", "Windows path and process semantics")
@@ -146,7 +237,7 @@ class WindowsAdversarialTests(unittest.TestCase):
         self.root = Path(directory.name)
 
     def test_report_namespace_cannot_write_git_hook(self):
-        subprocess.run(["git", "init", "-q", str(self.root)], check=True, timeout=10)
+        subprocess.run([verify._command_path("git"), "init", "-q", str(self.root)], check=True, timeout=10)
         hook = self.root / ".git" / "hooks" / "pre-commit"
         try:
             target = verify.checked_report_path("\\\\?\\" + str(hook), self.root,
@@ -158,7 +249,7 @@ class WindowsAdversarialTests(unittest.TestCase):
         self.assertFalse(hook.exists(), "extended path wrote a report inside .git")
 
     def test_ambiguous_windows_report_paths_are_rejected(self):
-        subprocess.run(["git", "init", "-q", str(self.root)], check=True, timeout=10)
+        subprocess.run([verify._command_path("git"), "init", "-q", str(self.root)], check=True, timeout=10)
         hook = str(self.root / ".git" / "hooks" / "pre-commit")
         targets = ["\\\\?\\" + hook, "\\\\.\\" + hook,
                    "\\\\?\\GLOBALROOT\\??\\" + hook,
@@ -171,7 +262,7 @@ class WindowsAdversarialTests(unittest.TestCase):
                 verify.checked_report_path(target, self.root, self.root / "config.json")
 
     def test_existing_file_aliases_are_protected(self):
-        subprocess.run(["git", "init", "-q", str(self.root)], check=True, timeout=10)
+        subprocess.run([verify._command_path("git"), "init", "-q", str(self.root)], check=True, timeout=10)
         source = self.root / "source.txt"; source.write_text("keep")
         for target in [str(source) + ".", str(source) + " ", str(source) + "::$DATA",
                        "\\\\?\\" + str(source), "\\\\.\\" + str(source)]:
@@ -181,7 +272,7 @@ class WindowsAdversarialTests(unittest.TestCase):
 
     def test_short_git_alias_is_protected(self):
         import ctypes
-        subprocess.run(["git", "init", "-q", str(self.root)], check=True, timeout=10)
+        subprocess.run([verify._command_path("git"), "init", "-q", str(self.root)], check=True, timeout=10)
         short = ctypes.create_unicode_buffer(32768)
         length = ctypes.windll.kernel32.GetShortPathNameW(str(self.root / ".git"), short,
                                                         len(short))
@@ -220,8 +311,8 @@ class WindowsAdversarialTests(unittest.TestCase):
         value = config()
         value["gates"][0]["argv"] = ["missing-tool", "/c", f'echo hijacked>"{marker}"']
         previous = Path.cwd()
-        with patch.dict(os.environ, {"PATH": str(bindir),
-                                     "NoDefaultCurrentDirectoryInExePath": "1"}):
+        with patch.dict(os.environ, {"PATH": str(bindir)}):
+            os.environ.pop("NoDefaultCurrentDirectoryInExePath", None)
             try:
                 os.chdir(caller)
                 report = verify.run_gates(value, self.root)
@@ -232,18 +323,32 @@ class WindowsAdversarialTests(unittest.TestCase):
         self.assertEqual(report["gates"][1]["status"], "not_run")
 
     def test_git_metadata_query_ignores_caller_cwd(self):
-        subprocess.run(["git", "init", "-q", str(self.root)], check=True, timeout=10)
+        subprocess.run([verify._command_path("git"), "init", "-q", str(self.root)], check=True, timeout=10)
         caller = self.root / "caller"; caller.mkdir()
         shutil.copyfile(Path(os.environ["SystemRoot"]) / "System32" / "where.exe",
                         caller / "git.exe")
         previous = Path.cwd()
-        try:
-            os.chdir(caller)
-            target = verify.checked_report_path(self.root / "report.json", self.root,
-                                                self.root / "config.json")
-        finally:
-            os.chdir(previous)
+        with patch.dict(os.environ):
+            os.environ.pop("NoDefaultCurrentDirectoryInExePath", None)
+            try:
+                os.chdir(caller)
+                target = verify.checked_report_path(self.root / "report.json", self.root,
+                                                    self.root / "config.json")
+            finally:
+                os.chdir(previous)
         self.assertEqual(target, self.root / "report.json")
+
+    def test_adversarial_git_ignores_caller_cwd(self):
+        shutil.copyfile(Path(os.environ["SystemRoot"]) / "System32" / "where.exe",
+                        self.root / "git.exe")
+        env = {k: v for k, v in os.environ.items()
+               if k.upper() != "NODEFAULTCURRENTDIRECTORYINEXEPATH"}
+        result = subprocess.run([sys.executable, "-c",
+            "import sys, unittest; sys.path.insert(0, sys.argv.pop(1)); unittest.main(module=None)",
+            str(Path(__file__).resolve().parents[1]),
+            "tests.test_adversarial.AdversarialTests.test_git_metadata_is_protected"],
+            cwd=self.root, env=env, capture_output=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_batch_metacharacters_cannot_inject_commands(self):
         for extension in (".cmd", ".bat"):
@@ -289,6 +394,26 @@ class WindowsAdversarialTests(unittest.TestCase):
         self.assertFalse(marker.exists(), "cmd.exe expanded the executable's file name")
         self.assertEqual(report["gates"][0]["status"], "launch_error")
 
+    def test_batch_path_delimiters_cannot_select_a_sibling(self):
+        (self.root / "tool.bat").write_text("@exit /b 9\n")
+        delimiters = ",;=" + "".join(chr(n) for n in range(32, sys.maxunicode + 1)
+                                      if chr(n).isspace())
+        previous = Path.cwd()
+        try:
+            os.chdir(self.root)
+            for extension in (".cmd", ".bat"):
+                for delimiter in delimiters:
+                    tool = self.root / ("tool" + delimiter + "lint" + extension)
+                    tool.write_text("@exit /b 0\n")
+                    for args in ([], ["hello world"]):
+                        value = config()
+                        value["gates"][0]["argv"] = [os.path.join(".", tool.name), *args]
+                        with self.subTest(extension=extension, delimiter=repr(delimiter), args=args):
+                            report = verify.run_gates(value, self.root)
+                            self.assertEqual(report["status"], "passed")
+        finally:
+            os.chdir(previous)
+
     def test_safe_batch_arguments_and_paths_with_spaces_still_work(self):
         for extension in (".cmd", ".bat"):
             tool = self.root / ("tool" + extension)
@@ -296,7 +421,8 @@ class WindowsAdversarialTests(unittest.TestCase):
             for command in (str(tool), tool.name, tool.stem):
                 value = config(); value["gates"][0]["argv"] = [command, "hello world"]
                 with self.subTest(command=command), patch.dict(os.environ,
-                        {"PATH": str(self.root), "NoDefaultCurrentDirectoryInExePath": "1"}):
+                        {"PATH": str(self.root)}):
+                    os.environ.pop("NoDefaultCurrentDirectoryInExePath", None)
                     report = verify.run_gates(value, self.root)
                     self.assertEqual(report["status"], "passed")
 

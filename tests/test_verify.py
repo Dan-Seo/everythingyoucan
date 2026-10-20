@@ -159,6 +159,34 @@ class RunnerTests(unittest.TestCase):
                 self.assertEqual(verify.checked_report_path(root/"report.json", root, cfg),
                                  root/"report.json")
 
+    def test_dangling_report_symlink_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); target = root / "missing.json"; link = root / "report.json"
+            try:
+                link.symlink_to(target)
+            except OSError as exc:
+                if sys.platform == "win32" and exc.winerror == 1314:
+                    self.skipTest("Windows symlink privilege is unavailable")
+                raise
+            with self.assertRaisesRegex(ValueError, "symlink"):
+                verify.checked_report_path(link, MODULE.parents[1], root / "config.json")
+            self.assertTrue(link.is_symlink())
+            self.assertFalse(target.exists())
+
+    def test_report_path_is_rechecked_after_gates(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); cfg = root / "config.json"; out = root / "report.json"
+            value = config()
+            value["gates"][0]["argv"] = ["{python}", "-c",
+                "from pathlib import Path; import sys; Path(sys.argv[1]).write_text('keep')",
+                str(out)]
+            cfg.write_text(json.dumps(value), encoding="utf-8")
+            result = subprocess.run([sys.executable, str(MODULE), "--config", str(cfg),
+                                     "--report", str(out)], capture_output=True, timeout=15)
+            self.assertEqual(out.read_text(), "keep")
+            self.assertEqual(result.returncode, 2, result.stderr)
+            self.assertIn(b"existing non-report file", result.stderr)
+
     def test_adversarial_module_imports_from_repository_root(self):
         result = subprocess.run([sys.executable, "-c", "import tests.test_adversarial"],
                                 cwd=MODULE.parents[1], capture_output=True, timeout=15)
@@ -179,7 +207,8 @@ class LineCountGateTests(unittest.TestCase):
                                       "commit", "-q", "-m", "base")
 
     def git(self, *args):
-        subprocess.run(["git", *args], cwd=self.root, check=True, capture_output=True, timeout=15)
+        subprocess.run([verify._command_path("git"), *args], cwd=self.root,
+                       check=True, capture_output=True, timeout=15)
 
     def write(self, code_lines):
         (self.root / "scripts" / "a.py").write_text(
@@ -201,6 +230,21 @@ class LineCountGateTests(unittest.TestCase):
                 self.write(lines)
                 self.assertEqual(self.run_gate("--base", "HEAD", "--min-percent", "0"),
                                  expected)
+
+    def test_untracked_python_file_counts_as_growth(self):
+        self.assertEqual(self.run_gate("--base", "HEAD", "--min-percent", "0"), 0)
+        (self.root / "scripts" / "new.py").write_text("x = 1\n")
+        self.assertEqual(self.run_gate("--base", "HEAD", "--min-percent", "0"), 1)
+
+    def test_zero_code_lines_at_base_is_an_error(self):
+        self.write(0)
+        self.git("add", "scripts/a.py")
+        self.git("-c", "user.name=T", "-c", "user.email=t@example.invalid",
+                 "commit", "-q", "-m", "empty base")
+        for lines in (0, 1):
+            with self.subTest(lines=lines):
+                self.write(lines)
+                self.assertEqual(self.run_gate("--base", "HEAD", "--min-percent", "0"), 2)
 
     def test_blank_comment_and_test_lines_do_not_count(self):
         self.write(8)

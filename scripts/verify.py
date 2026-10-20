@@ -14,7 +14,7 @@ GATE_NAMES = ("deterministic", "critic", "debloat")
 CONFIG_KEYS = frozenset({"version", "gates"})
 GATE_KEYS = frozenset({"name", "argv", "timeout_seconds"})
 MAX_TIMEOUT_SECONDS = 3600
-REPORT_PREFIX = '{\n  "version": 1,\n  "status": "'  # how write_report() starts a run_gates() report
+REPORT_PREFIX = b'{\n  "version": 1,\n  "status": "'  # how write_report() starts a run_gates() report
 
 
 def _check_object(obj, expected_keys, where):
@@ -126,10 +126,12 @@ def run_gates(config, root):
                 argv[0] = _command_path(argv[0])
                 # Windows implicitly runs batch files through cmd.exe even with shell=False.
                 if (sys.platform == "win32"
-                        and Path(argv[0].rstrip(" .")).suffix.casefold() in (".cmd", ".bat")
-                        and any(char in '&|<>^()%!"' or ord(char) < 32
-                                for arg in argv for char in arg)):
-                    raise OSError("unsafe Windows batch command or argument")
+                        and Path(argv[0].rstrip(" .")).suffix.casefold() in (".cmd", ".bat")):
+                    if any(char in '&|<>^()%!"' or ord(char) < 32
+                           for arg in argv for char in arg):
+                        raise OSError("unsafe Windows batch command or argument")
+                    # cmd.exe also splits unquoted paths on punctuation and Unicode whitespace.
+                    argv = f'"{argv[0]}" {subprocess.list2cmdline(argv[1:])}'
                 completed = subprocess.run(argv, cwd=root, timeout=gate["timeout_seconds"], shell=False)
                 result["exit_code"] = completed.returncode
                 result["status"] = "passed" if completed.returncode == 0 else "failed"
@@ -170,7 +172,7 @@ def checked_report_path(path, root, config_path):
         raise ValueError("report must not overwrite Git metadata")
     if path.exists():
         # Only a previous report may be replaced; read just enough to recognize one.
-        with path.open(encoding="utf-8", errors="replace") as stream:
+        with path.open("rb") as stream:
             if stream.read(len(REPORT_PREFIX)) != REPORT_PREFIX:
                 raise ValueError("report must not overwrite an existing non-report file")
     return path
@@ -181,7 +183,7 @@ def write_report(path, report):
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = None
     try:
-        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", newline="\n", dir=path.parent,
                                          prefix=".verification-", delete=False) as stream:
             temporary = Path(stream.name)
             json.dump(report, stream, ensure_ascii=False, indent=2, allow_nan=False)

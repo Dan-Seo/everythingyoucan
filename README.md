@@ -43,6 +43,9 @@ The runner stops after the first failed gate. Exit codes are 0 for all commands
 passing, 1 for a gate failure, and 2 for invalid configuration/report I/O. Output
 is streamed to the terminal. The JSON report defaults to
 `.artifacts/verification.json`; use `--report path.json` for a different path.
+Reports now use LF line endings, and existing prefixes are compared as bytes.
+Old CRLF reports are not overwritten: select a new report path or manually
+move/remove the old file before running again.
 A report always says `human_approval: pending`, even when every command passes.
 Existing reports can be stale after an interrupted or invalid run. Check the
 current process exit and actual output, not merely the presence of a report.
@@ -64,15 +67,21 @@ current process exit and actual output, not merely the presence of a report.
 
 This repository starts with `--min-percent 0`, which rejects code growth and
 allows unchanged or reduced code. No debloating pass has happened yet: safety
-fixes increased the measured count from 161 to 215 code lines, so a 20% reduction
+fixes increased the measured count from 161 to 215 code lines in the first
+review-fix commit and grew further in the second, so a 20% reduction
 requirement is premature. `check_loc.py` still defaults to 20% as required by
 CLAUDE.md Gate 3. When a real debloating pass starts, set this repository's
 minimum to 20% and compare against the commit before that pass.
 
-The baseline is pinned to the PM's review-fix commit
-`7358761d30cab9cf6f03f6e5fadf3e62342319b1`, with `--min-percent 0`.
+The baseline is repinned to the PM's second review-fix commit
+`912dd6af7e4a298a356eab47c65fe243244e88c8`, with `--min-percent 0`.
+This follows the owner's decision to prohibit growth relative to the fix commit,
+including the safety fixes in the baseline rather than claiming they reduced code.
 All three gates must pass for unchanged code. `docs/RESULTS.md` records the
-actual stage 2 executions after pinning this baseline.
+actual stage 3 executions after repinning this baseline.
+The counter uses `git grep -a` so `.gitattributes` binary/`-diff` flags cannot
+hide matching files; non-ignored untracked Python files also count.
+Git execution, timeout and output-decoding errors exit with code 2.
 
 ## Trust boundaries
 
@@ -89,17 +98,24 @@ path. Reports are unsigned local evidence, not tamper-proof attestations.
 
 The runner rejects report targets that would overwrite the config, Git metadata
 (including linked-worktree metadata, compared case-insensitively), or any
-existing non-report file. Only the emitted report prefix identifies a previous
-report; it is not an authenticity check. Symlink targets are rejected. Windows
+existing non-report file. Only the exact LF report prefix, compared in binary
+mode, identifies a previous report; another tool's JSON with the same prefix is
+indistinguishable. This is not an authenticity check. Symlink targets are rejected. Windows
 also rejects namespace prefixes (`\\?\`, `\\.\`), UNC paths, NTFS alternate
 data streams, and path components ending in dots or spaces. Paths are checked
 again after commands execute, but files can still change between checking and
 writing; this is not protection against a hostile filesystem race.
 
-Windows executable lookup, including internal Git calls, searches only absolute
+Windows executable lookup, including Git calls in `verify.py`, `check_loc.py`
+and the tests, searches only absolute
 PATH entries and PATHEXT candidates without implicitly searching the current
 directory. Windows can still launch batch files through cmd.exe with
-`shell=False`, so the runner rejects unsafe batch paths and arguments.
+`shell=False`, so the runner rejects unsafe batch paths and arguments. It always
+double-quotes the resolved batch path, including paths without spaces, to prevent
+splitting on delimiters such as `,`, `;`, `=` and U+00A0.
+Hijacking tests remove `NoDefaultCurrentDirectoryInExePath` from the environment
+used for the attack so an OS lookup restriction cannot mask a regression.
+Stage 3 records both unittest commands with the variable set to `1` and removed.
 
 The original `.claude/settings.json` refers to a machine-specific Windows hook.
 It has been deliberately preserved, not repaired, disabled or replaced. This

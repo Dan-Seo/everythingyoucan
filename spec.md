@@ -34,12 +34,15 @@ instructions; this tool is not a sandbox or a security policy.
 Commands run sequentially from the repository root with `shell=False`. A bare
 argv[0] (no directory part) is located on PATH. On Windows, only absolute PATH
 entries and PATHEXT candidates are searched; the current directory is not
-implicitly searched. Internal Git commands use the same lookup. Windows can
+implicitly searched. Internal Git commands in both `verify.py` and
+`check_loc.py`, and Git calls in the tests, use the same lookup. Windows can
 implicitly invoke cmd.exe for `.cmd` and `.bat` files even with `shell=False`;
 such commands are rejected with `launch_error` if their resolved executable
 path or any argument contains `&`, `|`, `<`, `>`, `^`, `(`, `)`, `%`, `!`, `"`,
 or a control character below U+0020. Batch commands requiring those characters
-are intentionally unsupported. The first
+are intentionally unsupported. The resolved batch executable path is always
+double-quoted, even without spaces, so cmd.exe cannot split it on delimiters
+such as `,`, `;`, `=` or U+00A0. The first
 nonzero exit, timeout or launch failure stops execution. Output is inherited by
 the terminal, not captured in memory. The JSON report contains version, overall
 status, human_approval (`pending`), and ordered gate results including name,
@@ -50,9 +53,13 @@ Reports are written atomically in the chosen report directory after commands
 finish. The report target must not be the configuration, Git metadata
 (including linked-worktree/common metadata directories, compared without regard
 to letter case) or any other existing file except a previous report. A previous
-report is recognized when its text starts with what `write_report` emits for a
-`run_gates` report (`{`, newline, `  "version": 1,`, newline, `  "status": "`);
-only that prefix is read from an existing target. Symlink targets are rejected.
+report is recognized by a binary comparison with the exact LF prefix emitted
+for a `run_gates` report (`b'{\n  "version": 1,\n  "status": "'`); only that
+prefix is read. Reports are written as UTF-8 with LF on every platform.
+Old CRLF reports are not overwritten: choose a new `--report` path or manually
+move/remove the old file. Another tool's JSON with the same LF prefix cannot
+be distinguished from a report; this is not an authenticity check.
+Symlink targets are rejected.
 On Windows, namespace prefixes such as `\\?\` and `\\.\`, UNC paths, NTFS
 alternate data streams, and path components ending in a dot or space are
 rejected. Default output is
@@ -80,20 +87,26 @@ No timestamps or runtime values required: deterministic report structure.
 
 1. `python -m unittest discover -s tests` and
    `python -m unittest tests.test_adversarial` both exit 0 from the root without
-   third-party packages (use `python3` where appropriate).
+   third-party packages (use `python3` where appropriate). On Windows, also
+   run both commands with `NoDefaultCurrentDirectoryInExePath` removed from
+   the child environment. Hijacking regressions remove this variable themselves.
 2. `python scripts/verify.py --config verification.json` must exit 0 with all
-   gates passing. The debloat baseline is the PM's review-fix commit
-   `7358761d30cab9cf6f03f6e5fadf3e62342319b1`, with a 0% minimum reduction.
+   gates passing. The debloat baseline is the PM's second review-fix commit
+   `912dd6af7e4a298a356eab47c65fe243244e88c8`, with a 0% minimum reduction.
 3. Tests cover malformed/oversized schema, duplicate keys, booleans/nonfinite
    timeouts, gate ordering, success/failure ordering, timeout and launch failure,
    human approval invariant, atomic report output and protected output targets,
-   Windows path aliases, safe executable lookup and batch-command rejection.
+   Windows path aliases, safe executable lookup, quoted batch paths,
+   batch-command rejection, symlinks, post-gate path rechecks, untracked code,
+   zero-line baselines, binary report prefixes and Git execution errors.
 4. Critic cases are committed tests, not an assertion that all bugs are absent.
 5. The debloat gate runs `scripts/check_loc.py --base <ref>`: code lines (blank
    and `#`-only lines excluded) in the configured git pathspecs, default `*.py`
    outside `tests/`, must shrink by `--min-percent` (default 20) versus the base
-   commit. A missing or invalid base, or zero code lines at the base, fails with
-   exit 2. Debloat review still records actual simplifications; no reduction
+   commit. `git grep -a` counts matching files regardless of binary/`-diff`
+   attributes; `--untracked` includes non-ignored untracked files. A missing or
+   invalid base, zero code lines at the base, or a Git execution, timeout or
+   output-decoding error fails with exit 2. Debloat review still records actual simplifications; no reduction
    may weaken validation or tests to hit a quota.
 6. Original instruction and active hook files stay unchanged.
 
@@ -134,14 +147,18 @@ decisions replace the Phase 1 reverse interview for this round.
   restrictions above are accepted security decisions. The TOCTOU limitation
   remains explicitly outside the protection guarantee.
 - No debloating pass has happened yet; safety fixes increased code lines
-  from 161 in the original baseline to 215 in the review-fix commit.
+  from 161 in the original baseline to 215 in the first review-fix commit.
   This repository alone starts with `--min-percent 0`: unchanged or reduced
-  code passes, growth fails. Stage 2 pins the PM's review-fix commit
-  `7358761d30cab9cf6f03f6e5fadf3e62342319b1` as the baseline.
+  code passes, growth fails. After the independent verifier's first FAIL,
+  stage 3 repins the baseline to the second review-fix commit
+  `912dd6af7e4a298a356eab47c65fe243244e88c8`. The owner chose to prohibit
+  growth relative to the fix commit, so the safety fixes themselves are included
+  in the baseline; this does not claim a reduction against earlier code.
   `check_loc.py` retains its default 20% requirement under CLAUDE.md Gate 3.
   When a real debloating pass starts, use its preceding commit as the base and
   raise this repository's minimum to 20%.
 - Preserve previous fixes and the deletion of the obsolete scope checker.
-  Do not edit `scripts/verify.py` or `tests/test_adversarial.py`. Stage 2 updates
-  `docs/RESULTS.md` from actual executions after baseline pinning. The PM owns
+  Stage 3 changes only configuration and documentation, not `scripts/` or
+  `tests/`, and updates `docs/RESULTS.md` from actual executions after repinning.
+  The PM owns
   commits; `.claude/agents/` and PreToolUse hooks remain outside this work.

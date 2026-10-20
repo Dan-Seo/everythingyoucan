@@ -81,11 +81,9 @@ No timestamps or runtime values required: deterministic report structure.
 1. `python -m unittest discover -s tests` and
    `python -m unittest tests.test_adversarial` both exit 0 from the root without
    third-party packages (use `python3` where appropriate).
-2. Run `python scripts/verify.py --config verification.json`. During this
-   uncommitted review-fix stage, deterministic and critic must pass; debloat
-   is expected to fail with exit 1 because HEAD predates the safety fixes.
-   After the PM commits the fixes and pins that SHA in a separately instructed
-   step, all gates must pass for unchanged code.
+2. `python scripts/verify.py --config verification.json` must exit 0 with all
+   gates passing. The debloat baseline is the PM's review-fix commit
+   `7358761d30cab9cf6f03f6e5fadf3e62342319b1`, with a 0% minimum reduction.
 3. Tests cover malformed/oversized schema, duplicate keys, booleans/nonfinite
    timeouts, gate ordering, success/failure ordering, timeout and launch failure,
    human approval invariant, atomic report output and protected output targets,
@@ -135,15 +133,15 @@ decisions replace the Phase 1 reverse interview for this round.
 - Windows report-path restrictions, executable lookup and batch-command
   restrictions above are accepted security decisions. The TOCTOU limitation
   remains explicitly outside the protection guarantee.
-- No debloating pass has happened yet; `check_loc.py` measures an increase
-  from 161 code lines at HEAD to 215. Requiring 20% reduction now would fail.
+- No debloating pass has happened yet; safety fixes increased code lines
+  from 161 in the original baseline to 215 in the review-fix commit.
   This repository alone starts with `--min-percent 0`: unchanged or reduced
-  code passes, growth fails. Keep `--base HEAD` at this stage. After committing
-  these fixes, the PM will separately instruct pinning that commit's SHA.
+  code passes, growth fails. Stage 2 pins the PM's review-fix commit
+  `7358761d30cab9cf6f03f6e5fadf3e62342319b1` as the baseline.
   `check_loc.py` retains its default 20% requirement under CLAUDE.md Gate 3.
   When a real debloating pass starts, use its preceding commit as the base and
   raise this repository's minimum to 20%.
-- Preserve previous fixes and the staged deletion of the obsolete scope checker.
-  Do not edit `scripts/verify.py`, `tests/test_adversarial.py` or
-  `docs/RESULTS.md` in this stage. The PM owns commits and later baseline/result
-  updates; `.claude/agents/` and PreToolUse hooks remain outside this work.
+- Preserve previous fixes and the deletion of the obsolete scope checker.
+  Do not edit `scripts/verify.py` or `tests/test_adversarial.py`. Stage 2 updates
+  `docs/RESULTS.md` from actual executions after baseline pinning. The PM owns
+  commits; `.claude/agents/` and PreToolUse hooks remain outside this work.

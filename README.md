@@ -69,11 +69,10 @@ requirement is premature. `check_loc.py` still defaults to 20% as required by
 CLAUDE.md Gate 3. When a real debloating pass starts, set this repository's
 minimum to 20% and compare against the commit before that pass.
 
-For this uncommitted review-fix stage, keep `--base HEAD`. The harness is
-expected to exit 1 at debloat because HEAD predates the fixes; deterministic
-and critic must pass. After committing the fixes, the PM will separately
-instruct pinning that commit's SHA. `docs/RESULTS.md` retains historical
-evidence until the subsequent baseline and results update.
+The baseline is pinned to the PM's review-fix commit
+`7358761d30cab9cf6f03f6e5fadf3e62342319b1`, with `--min-percent 0`.
+All three gates must pass for unchanged code. `docs/RESULTS.md` records the
+actual stage 2 executions after pinning this baseline.
 
 ## Trust boundaries
 

@@ -51,7 +51,7 @@ describe the fixes and accepted limits by topic.
 | Windows batch execution | Fixed with an intentional limit | `.cmd`/`.bat` paths or arguments containing `& | < > ^ ( ) % ! "` or characters below U+0020 cause `launch_error`; commands requiring them are unsupported. |
 | UTF-8 BOM configuration and adversarial module invocation | Fixed | Accept a leading BOM and support `python -m unittest tests.test_adversarial` from the repository root. |
 | Newline-parent regression on Windows | Intentional platform limit | Skip only this unsupported filesystem case on Windows; run it elsewhere. |
-| Debloat gate | Implemented; baseline pinning pending | `scripts/check_loc.py` measures code lines with default 20% reduction; this repository starts at 0% with `--base HEAD`. The PM pins the review-fix commit SHA later. |
+| Debloat gate | Baseline pinned in stage 2 | `scripts/check_loc.py` keeps its default 20%; this repository uses 0% against `7358761d30cab9cf6f03f6e5fadf3e62342319b1`. |
 | Original reverse interview | Recorded process issue | Accepted review-fix decisions are in `spec.md`; code cannot retroactively perform the original interview. |
 | Installed agents and PreToolUse hooks | Out of scope | Existing settings and instruction files remain unchanged. |
 | Filesystem race between checking and writing | Known limit | Rechecking and atomic replacement do not prevent TOCTOU races. |
@@ -64,15 +64,13 @@ Run from the repository root:
 python3 -m unittest discover -s tests -v
 python3 scripts/verify.py --config verification.json
 python3 -m unittest tests.test_adversarial
-python3 scripts/check_loc.py --base HEAD --min-percent 0
+python3 scripts/check_loc.py --base 7358761d30cab9cf6f03f6e5fadf3e62342319b1 --min-percent 0
 ```
 
 The first post-fix run executed 22 tests with exit 0; this is historical evidence.
-`docs/RESULTS.md` also remains historical and is not updated in this stage.
-Use `python` on Windows. Both unittest commands must exit 0. Until the PM
-commits the review fixes and separately instructs pinning their SHA, the
-harness is expected to exit 1 at debloat because HEAD predates the added safety
-code; deterministic and critic must pass. The sample harness runs deterministic and
+`docs/RESULTS.md` records the actual stage 2 executions against the pinned
+review-fix baseline. Use `python` on Windows. Both unittest commands and the
+harness must exit 0. The sample harness runs deterministic and
 adversarial test subsets separately, followed by the code line count check. A green
 third command is not a model simplification judgment or human approval.
 
@@ -85,10 +83,10 @@ than being artificially shrunk. No 20–30% reduction is claimed. Removing the
 metadata check or Unicode validation to meet a quota would be a regression.
 
 No debloating pass has happened yet. This repository alone uses a 0% minimum
-to reject growth after the review-fix baseline is pinned; `check_loc.py` keeps
+to reject growth against the pinned review-fix baseline; `check_loc.py` keeps
 its default 20%. A real debloating pass must raise the repository minimum to
-20% and compare against the preceding commit. No baseline is changed or
-commit created in this stage.
+20% and compare against the preceding commit. The PM created the review-fix
+commit; stage 2 only pins its SHA and records validation.
 
 ## Residual limitations
 

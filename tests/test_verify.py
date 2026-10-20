@@ -60,6 +60,12 @@ class SchemaTests(unittest.TestCase):
                 path.write_bytes(value)
                 with self.assertRaises(ValueError): verify.load_config(path)
 
+    def test_load_config_accepts_utf8_bom(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            path.write_bytes(b"\xef\xbb\xbf" + json.dumps(config()).encode())
+            self.assertEqual(verify.load_config(path), config())
+
 
 class RunnerTests(unittest.TestCase):
     def test_success(self):
@@ -96,6 +102,18 @@ class RunnerTests(unittest.TestCase):
             value = config(); value["gates"][0]["argv"] = [str(Path(directory)/"absent")]
             report = verify.run_gates(value, directory)
         self.assertEqual(report["gates"][0]["status"], "launch_error")
+
+    def test_command_found_on_path_by_name(self):
+        # Windows installs tools such as npm as .cmd files that CreateProcess cannot find by name.
+        with tempfile.TemporaryDirectory() as directory:
+            windows = sys.platform == "win32"
+            tool = Path(directory) / ("tool.cmd" if windows else "tool")
+            tool.write_text("@exit /b 0\n" if windows else "#!/bin/sh\nexit 0\n")
+            tool.chmod(0o755)
+            value = config(); value["gates"][0]["argv"] = ["tool"]
+            with patch.dict(verify.os.environ, {"PATH": directory}):
+                report = verify.run_gates(value, directory)
+        self.assertEqual(report["gates"][0]["status"], "passed")
 
     def test_report_roundtrip(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -134,15 +152,75 @@ class RunnerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory); cfg = root / "config.json"; tracked = root / "source.py"
             with self.assertRaises(ValueError): verify.checked_report_path(cfg, root, cfg)
-            result = subprocess.CompletedProcess([], 0, stdout=b"source.py\0")
+            tracked.write_text("source")
             with patch.object(verify.subprocess, "run", side_effect=[
-                    subprocess.CompletedProcess([], 0, stdout=b".git\n"),
-                    subprocess.CompletedProcess([], 0, stdout=b".git\n"), result,
-                    subprocess.CompletedProcess([], 0, stdout=b".git\n"),
-                    subprocess.CompletedProcess([], 0, stdout=b".git\n"), result]):
+                    subprocess.CompletedProcess([], 0, stdout=b".git\n")] * 4):
                 with self.assertRaises(ValueError): verify.checked_report_path(tracked, root, cfg)
                 self.assertEqual(verify.checked_report_path(root/"report.json", root, cfg),
                                  root/"report.json")
+
+    def test_adversarial_module_imports_from_repository_root(self):
+        result = subprocess.run([sys.executable, "-c", "import tests.test_adversarial"],
+                                cwd=MODULE.parents[1], capture_output=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+
+class LineCountGateTests(unittest.TestCase):
+    SCRIPT = MODULE.parent / "check_loc.py"
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory(); self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        self.git("init", "-q")
+        (self.root / "scripts").mkdir(); (self.root / "tests").mkdir()
+        self.write(10)
+        (self.root / "tests" / "test_x.py").write_text("x = 1\n" * 50)
+        self.git("add", "."); self.git("-c", "user.name=T", "-c", "user.email=t@example.invalid",
+                                      "commit", "-q", "-m", "base")
+
+    def git(self, *args):
+        subprocess.run(["git", *args], cwd=self.root, check=True, capture_output=True, timeout=15)
+
+    def write(self, code_lines):
+        (self.root / "scripts" / "a.py").write_text(
+            "# comment\n\n    # indented comment\n" + "x = 1\n" * code_lines)
+
+    def run_gate(self, *args):
+        return subprocess.run([sys.executable, str(self.SCRIPT), *args], cwd=self.root,
+                              capture_output=True, timeout=15).returncode
+
+    def test_requires_default_twenty_percent_reduction_of_code_lines(self):
+        self.write(9)
+        self.assertEqual(self.run_gate("--base", "HEAD"), 1)
+        self.write(8)
+        self.assertEqual(self.run_gate("--base", "HEAD"), 0)
+
+    def test_zero_percent_allows_no_growth_or_reduction_but_rejects_growth(self):
+        for lines, expected in [(10, 0), (9, 0), (11, 1)]:
+            with self.subTest(lines=lines):
+                self.write(lines)
+                self.assertEqual(self.run_gate("--base", "HEAD", "--min-percent", "0"),
+                                 expected)
+
+    def test_blank_comment_and_test_lines_do_not_count(self):
+        self.write(8)
+        (self.root / "scripts" / "a.py").write_text(
+            (self.root / "scripts" / "a.py").read_text() + "\n# more\n" * 30)
+        (self.root / "tests" / "test_x.py").write_text("x = 1\n" * 500)
+        self.assertEqual(self.run_gate("--base", "HEAD"), 0)
+
+    def test_paths_and_minimum_are_configurable(self):
+        self.write(9)
+        self.assertEqual(self.run_gate("--base", "HEAD", "--min-percent", "10"), 0)
+        (self.root / "tests" / "test_x.py").write_text("x = 1\n" * 10)
+        self.assertEqual(self.run_gate("--base", "HEAD", "tests/"), 0)
+        self.assertEqual(self.run_gate("--base", "HEAD", "--min-percent", "101"), 2)
+
+    def test_missing_or_invalid_base_fails(self):
+        self.write(1)
+        for args in [(), ("--base", ""), ("--base", "no-such-ref"), ("--base", "--help")]:
+            with self.subTest(args=args):
+                self.assertEqual(self.run_gate(*args), 2)
 
 
 if __name__ == "__main__":

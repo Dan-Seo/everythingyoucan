@@ -14,6 +14,7 @@ GATE_NAMES = ("deterministic", "critic", "debloat")
 CONFIG_KEYS = frozenset({"version", "gates"})
 GATE_KEYS = frozenset({"name", "argv", "timeout_seconds"})
 MAX_TIMEOUT_SECONDS = 3600
+REPORT_PREFIX = '{\n  "version": 1,\n  "status": "'  # how write_report() starts a run_gates() report
 
 
 def _check_object(obj, expected_keys, where):
@@ -87,10 +88,30 @@ def load_config(path):
     if len(raw) > 65536:
         raise ValueError("config exceeds 64 KiB")
     try:
-        data = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_object)
+        data = json.loads(raw.decode("utf-8-sig"), object_pairs_hook=_unique_object)
     except (UnicodeError, RecursionError) as exc:
         raise ValueError("config must be UTF-8 JSON with bounded nesting") from exc
     return validate_config(data)
+
+
+def _command_path(command):
+    if os.path.dirname(command):
+        return command
+    suffixes = [""]
+    if sys.platform == "win32":
+        suffixes = [ext for ext in (os.environ.get("PATHEXT") or ".COM;.EXE;.BAT;.CMD")
+                    .split(os.pathsep) if ext]
+        if command.casefold().endswith(tuple(ext.casefold() for ext in suffixes)):
+            suffixes.insert(0, "")
+    for directory in os.get_exec_path():
+        # Never let Windows add the caller's working directory to executable lookup.
+        if sys.platform == "win32" and not os.path.isabs(directory):
+            continue
+        for suffix in suffixes:
+            candidate = Path(directory) / (command + suffix)
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return str(candidate.absolute())
+    raise FileNotFoundError(f"command not found on PATH: {command}")
 
 
 def run_gates(config, root):
@@ -102,6 +123,13 @@ def run_gates(config, root):
         if not blocked:
             argv = [sys.executable if arg == "{python}" else arg for arg in gate["argv"]]
             try:
+                argv[0] = _command_path(argv[0])
+                # Windows implicitly runs batch files through cmd.exe even with shell=False.
+                if (sys.platform == "win32"
+                        and Path(argv[0].rstrip(" .")).suffix.casefold() in (".cmd", ".bat")
+                        and any(char in '&|<>^()%!"' or ord(char) < 32
+                                for arg in argv for char in arg)):
+                    raise OSError("unsafe Windows batch command or argument")
                 completed = subprocess.run(argv, cwd=root, timeout=gate["timeout_seconds"], shell=False)
                 result["exit_code"] = completed.returncode
                 result["status"] = "passed" if completed.returncode == 0 else "failed"
@@ -115,9 +143,19 @@ def run_gates(config, root):
             "human_approval": "pending", "gates": results}
 
 
+def _is_within(path, parent):
+    # Case-insensitive: default macOS/Windows file systems treat .GIT as .git.
+    path, parent = (type(p)(str(p).casefold()) for p in (path, parent))
+    return path.is_relative_to(parent)
+
+
 def checked_report_path(path, root, config_path):
-    """Protect config and tracked paths; not a defense against hostile local races."""
+    """Protect config, Git metadata and existing non-report files; not race-proof."""
     path = Path(path).absolute()
+    if (sys.platform == "win32" and (path.drive.startswith("\\")
+            or any(":" in part or (part not in (".", "..") and part.endswith((".", " ")))
+                   for part in path.parts[1:]))):
+        raise ValueError("report must use a local Windows path without streams or trailing dots/spaces")
     if path.is_symlink():
         raise ValueError("report target must not be a symlink")
     resolved = path.resolve()
@@ -125,17 +163,16 @@ def checked_report_path(path, root, config_path):
         raise ValueError("report must not overwrite its config")
     protected = [Path(root) / ".git"]
     for option in ("--git-dir", "--git-common-dir"):
-        metadata = subprocess.run(["git", "rev-parse", option], cwd=root, check=True,
+        metadata = subprocess.run([_command_path("git"), "rev-parse", option], cwd=root, check=True,
                                   stdout=subprocess.PIPE, timeout=10)
         protected.append(Path(root) / os.fsdecode(metadata.stdout.removesuffix(b"\n")))
-    if any(resolved == item.resolve() or resolved.is_relative_to(item.resolve())
-           for item in protected):
+    if any(_is_within(resolved, item.resolve()) for item in protected):
         raise ValueError("report must not overwrite Git metadata")
-    tracked = subprocess.run(["git", "ls-files", "-z"], cwd=root, check=True,
-                             stdout=subprocess.PIPE, timeout=10)
-    for name in tracked.stdout.split(b"\0"):
-        if name and (Path(root) / os.fsdecode(name)).resolve() == resolved:
-            raise ValueError("report must not overwrite a tracked file")
+    if path.exists():
+        # Only a previous report may be replaced; read just enough to recognize one.
+        with path.open(encoding="utf-8", errors="replace") as stream:
+            if stream.read(len(REPORT_PREFIX)) != REPORT_PREFIX:
+                raise ValueError("report must not overwrite an existing non-report file")
     return path
 
 

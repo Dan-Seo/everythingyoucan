@@ -99,8 +99,9 @@ No timestamps or runtime values required: deterministic report structure.
    run both commands with `NoDefaultCurrentDirectoryInExePath` removed from
    the child environment. Hijacking regressions remove this variable themselves.
 2. `python scripts/verify.py --config verification.json` must exit 0 with all
-   gates passing. The debloat baseline is the PM's third review-fix commit
-   `5e4471e9dc4a1d2d3559868abb151b3313c4c697`, with a 0% minimum reduction.
+   gates passing after the PM repins the baseline. The debloat baseline is the
+   commit pinned in `verification.json` (the latest review-fix commit), with a
+   0% minimum reduction.
 3. Tests cover malformed/oversized schema, duplicate keys, booleans/nonfinite
    timeouts, gate ordering, success/failure ordering, timeout and launch failure,
    human approval invariant, atomic report output and protected output targets,
@@ -119,9 +120,13 @@ No timestamps or runtime values required: deterministic report structure.
    `.gitattributes` bypass; adding `-a` was not what fixed that omission.
    `--untracked` includes non-ignored untracked files, but nested untracked
    repositories, ignored files and excluded paths remain outside the count. A missing or
-   invalid base, zero code lines at the base, or a Git execution, timeout or
-   output-parsing error (including decoding and numeric conversion) fails with
-   exit 2. A failed grep emits a diagnostic with its exit code.
+   invalid base, zero code lines at the base, or a Git execution, timeout,
+   decoding or numeric-conversion error fails with exit 2. A failed grep emits
+   a diagnostic with its exit code. Non-UTF-8 encoding declarations in the first
+   two Python lines are rejected at both the base and worktree, with exit 2 and
+   the path. UTF-8 aliases and the tokenizer's `utf-8-*` names are allowed.
+   Git color and column output are disabled; unparsed declaration-check output
+   returns exit 2. Unmatched LF count output still contributes zero lines.
    Debloat review still records actual simplifications; no reduction
    may weaken validation or tests to hit a quota.
 6. Original instruction and active hook files stay unchanged.
@@ -165,16 +170,14 @@ decisions replace the Phase 1 reverse interview for this round.
 - No debloating pass has happened yet; safety fixes increased code lines
   from 161 in the original baseline to 215 in the first review-fix commit.
   This repository alone starts with `--min-percent 0`: unchanged or reduced
-  code passes, growth fails. After verifier2 returned PASS-WITH-NOTES on the
-  second-round fixes, the baseline is now the third review-fix commit
-  `5e4471e9dc4a1d2d3559868abb151b3313c4c697`. The owner chose to prohibit
+  code passes, growth fails. The baseline is the commit pinned in
+  `verification.json` (the latest review-fix commit). The owner chose to prohibit
   growth relative to the fix commit, so the safety fixes themselves are included
   in the baseline; this does not claim a reduction against earlier code.
   `check_loc.py` retains its default 20% requirement under CLAUDE.md Gate 3.
   When a real debloating pass starts, use its preceding commit as the base and
   raise this repository's minimum to 20%.
 - Preserve previous fixes and the deletion of the obsolete scope checker.
-  This post-commit update changes only configuration and documentation, not `scripts/` or
-  `tests/`, and updates `docs/RESULTS.md` from actual executions after repinning.
-  The PM owns
-  commits; `.claude/agents/` and PreToolUse hooks remain outside this work.
+  The fourth and fifth rounds update the counter, regression tests and
+  documentation; `docs/RESULTS.md` records actual executions before PM repinning.
+  The PM owns commits; `.claude/agents/` and PreToolUse hooks remain outside this work.

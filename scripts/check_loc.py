@@ -17,14 +17,18 @@ def count_code_lines(*grep_args):
     for prefix, options in (("", ("-z", "-n", "-m", "2")),
                             ("^", ("-z", "-c")),
                             ("\r", ("-h", "-o", "--no-break", "--no-heading"))):
-        result = subprocess.run([_command_path("git"), "grep", "-a", *options, "-E", "-e",
+        result = subprocess.run([_command_path("git"), "grep", "-a", *options,
+                                 "--no-color", "--no-column", "-E", "-e",
                                  prefix + CODE_LINE if prefix else "^", *grep_args],
                                 stdout=subprocess.PIPE, timeout=60)
         if result.returncode not in (0, 1):
             raise OSError(f"git grep failed with exit code {result.returncode}")
         if not prefix:
             headers = {}
-            for path, line in re.findall(rb"([^\0]+)\0[12]\0([^\n]*)\n", result.stdout):
+            records = re.compile(rb"([^\0]+)\0[12]\0([^\n]*)\n")
+            if records.sub(b"", result.stdout):
+                raise ValueError("unexpected git grep header output")
+            for path, line in records.findall(result.stdout):
                 headers[path] = headers.get(path, b"") + line + b"\n"
             for path, header in headers.items():
                 for line in re.split(rb"\r\n?|\n", header.removeprefix(codecs.BOM_UTF8))[:2]:
@@ -33,7 +37,9 @@ def count_code_lines(*grep_args):
                     cookie = re.match(rb"[ \t\f]*#.*?coding[:=][ \t]*([-\w.]+)", line)
                     if cookie:
                         try:
-                            encoding = codecs.lookup(cookie[1].decode("ascii")).name
+                            name = cookie[1].decode("ascii")
+                            encoding = ("utf-8" if name.lower().replace("_", "-").startswith("utf-8-")
+                                        else codecs.lookup(name).name)
                         except LookupError:
                             encoding = None
                         if encoding not in ("utf-8", "utf-8-sig"):

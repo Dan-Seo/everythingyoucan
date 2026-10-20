@@ -260,6 +260,125 @@ class LineCountAdversarialTests(unittest.TestCase):
                 with self.subTest(encoding=encoding, prefix=prefix):
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_utf8_tokenizer_suffix_cookies_are_allowed(self):
+        for encoding in ("utf-8-unix", "utf-8-dos", "UTF_8_UNIX", "utf_8_dos"):
+            for prefix in (b"", b"#!/usr/bin/env python\n"):
+                source = prefix + b"# coding: " + encoding.encode() + b"\n" + b"x = 1\n" * 80
+                compile(source, "a.py", "exec")
+                (self.root / "a.py").write_bytes(source)
+                result = subprocess.run([sys.executable, str(self.SCRIPT), "--base", "HEAD"],
+                                        cwd=self.root, capture_output=True, timeout=15)
+                with self.subTest(encoding=encoding, prefix=prefix):
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertIn(b"code lines 100 at HEAD -> 80 now", result.stdout)
+
+    def test_git_output_settings_cannot_hide_encoding_cookies(self):
+        global_config = self.root / "global.gitconfig"
+        payload = b"# coding: utf-7\n" + b"x = 1+AAo-" * 600 + b"\n"
+        compile(payload, "a.py", "exec")
+        with patch.dict(os.environ, {"GIT_CONFIG_GLOBAL": str(global_config)}):
+            for location in ("local", "global"):
+                for key, value in (("grep.column", "true"), ("color.ui", "always"),
+                                   ("color.grep", "always")):
+                    global_config.write_text("", encoding="utf-8")
+                    if location == "local":
+                        self.git("config", key, value)
+                    else:
+                        section, option = key.split(".")
+                        global_config.write_text(f"[{section}]\n{option} = {value}\n",
+                                                 encoding="utf-8")
+                    with self.subTest(location=location, setting=key):
+                        for source, expected in ((b"x = 1\n" * 80, 0), (payload, 2)):
+                            (self.root / "a.py").write_bytes(source)
+                            result = subprocess.run([sys.executable, str(self.SCRIPT),
+                                                     "--base", "HEAD"], cwd=self.root,
+                                                    capture_output=True, timeout=15)
+                            self.assertEqual(result.returncode, expected,
+                                             result.stdout + result.stderr)
+                            if expected == 0:
+                                self.assertIn(b"code lines 100 at HEAD -> 80 now", result.stdout)
+                            else:
+                                self.assertIn(b"non-UTF-8", result.stderr)
+                                self.assertIn(b"a.py", result.stderr)
+                    if location == "local":
+                        self.git("config", "--unset", key)
+
+    def test_unparsed_encoding_headers_are_execution_errors(self):
+        valid = b"a.py\0" + b"1\0x = 1\n"
+        for output in (b"garbage\n", b"garbage\0" + valid,
+                       valid + b"garbage\n", valid + b"garbage\0" + valid):
+            result = subprocess.run([sys.executable, "-c", r"""
+import runpy, subprocess, sys
+from unittest.mock import patch
+sys.path.insert(0, sys.argv[1])
+script, header = sys.argv[2], bytes.fromhex(sys.argv[3])
+sys.argv = [script, '--base', 'HEAD', '--min-percent', '0']
+outputs = [subprocess.CompletedProcess([], 0, stdout=b'a' * 40 + b'\n'),
+           subprocess.CompletedProcess([], 0, stdout=header),
+           subprocess.CompletedProcess([], 0, stdout=b'a.py\0' + b'100\n'),
+           subprocess.CompletedProcess([], 1, stdout=b''),
+           subprocess.CompletedProcess([], 0, stdout=b'a.py\0' + b'1\0x = 1\n'),
+           subprocess.CompletedProcess([], 0, stdout=b'a.py\0' + b'100\n'),
+           subprocess.CompletedProcess([], 1, stdout=b'')]
+with patch('subprocess.run', side_effect=outputs):
+    runpy.run_path(script, run_name='__main__')
+""", str(self.SCRIPT.parent), str(self.SCRIPT), output.hex()], cwd=self.root,
+                                    capture_output=True, timeout=15)
+            with self.subTest(output=output):
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertIn(b"git grep", result.stderr)
+                self.assertNotIn(b"Traceback", result.stderr)
+
+    def test_valid_encoding_headers_allow_empty_and_unterminated_files(self):
+        for name, source in (("empty.py", b""), ("blank.py", b"\n"),
+                             ("comment.py", b"# comment"), ("space name.py", b"x = 1")):
+            (self.root / name).write_bytes(source)
+        result = subprocess.run([sys.executable, str(self.SCRIPT), "--base", "HEAD",
+                                 "--min-percent", "0"], cwd=self.root,
+                                capture_output=True, timeout=15)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn(b"code lines 100 at HEAD -> 101 now", result.stdout)
+
+    def test_non_utf8_cookie_spellings_cannot_hide_code(self):
+        headers = (b"\r# coding: utf-7\r", b"\r\n# coding: utf-7\r\n",
+                   b" \n# coding: utf-7\n", b"\f\n# coding: utf-7\n",
+                   b" # coding: utf-7\n", b"\t# coding: utf-7\n", b"\f# coding: utf-7\n",
+                   b"#coding=utf-7\n", b"# vim: set fileencoding=utf-7 :\n",
+                   b"# coding:\tutf-7\n", b"# coding:   utf-7\n",
+                   b"# coding: utf-7 coding: utf-8\n")
+        for header in headers:
+            source = header + b"x = 1+AAo-" * 600 + b"\n"
+            compile(source, "a.py", "exec")
+            (self.root / "a.py").write_bytes(source)
+            result = subprocess.run([sys.executable, str(self.SCRIPT), "--base", "HEAD"],
+                                    cwd=self.root, capture_output=True, timeout=15)
+            with self.subTest(header=header):
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertIn(b"non-UTF-8", result.stderr)
+                self.assertIn(b"a.py", result.stderr)
+
+    def test_gitattributes_cannot_hide_encoding_cookies(self):
+        (self.root / "a.py").write_bytes(b"# coding: utf-7\n" + b"x = 1+AAo-" * 600 + b"\n")
+        for attribute in ("binary", "-diff"):
+            (self.root / ".gitattributes").write_text("*.py " + attribute + "\n")
+            result = subprocess.run([sys.executable, str(self.SCRIPT), "--base", "HEAD"],
+                                    cwd=self.root, capture_output=True, timeout=15)
+            with self.subTest(attribute=attribute):
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertIn(b"non-UTF-8", result.stderr)
+                self.assertIn(b"a.py", result.stderr)
+
+    def test_formfeed_and_vertical_tab_indentation_count(self):
+        for indent in (b"\v", b"\f"):
+            for ending in (b"\n", b"\r\n", b"\r"):
+                lines = [indent + b"# comment", indent, indent + b"x = 1"] * 600
+                (self.root / "a.py").write_bytes(ending.join(lines) + ending)
+                result = subprocess.run([sys.executable, str(self.SCRIPT), "--base", "HEAD"],
+                                        cwd=self.root, capture_output=True, timeout=15)
+                with self.subTest(indent=indent, ending=ending):
+                    self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                    self.assertIn(b"code lines 100 at HEAD -> 600 now", result.stdout)
+
     def test_encoding_cookies_after_second_line_are_ignored(self):
         for ending in (b"\n", b"\r\n", b"\r"):
             (self.root / "a.py").write_bytes(

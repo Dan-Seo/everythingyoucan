@@ -75,17 +75,20 @@ requirement is premature. `check_loc.py` still defaults to 20% as required by
 CLAUDE.md Gate 3. When a real debloating pass starts, set this repository's
 minimum to 20% and compare against the commit before that pass.
 
-The baseline is repinned to the PM's third review-fix commit
-`5e4471e9dc4a1d2d3559868abb151b3313c4c697`, with `--min-percent 0`.
+The baseline is the commit pinned in `verification.json` (the latest review-fix
+commit), with `--min-percent 0`. The PM repins it after each round of fixes.
 This follows the owner's decision to prohibit growth relative to the fix commit,
 including the safety fixes in the baseline rather than claiming they reduced code.
-All three gates must pass for unchanged code. `docs/RESULTS.md` records the
-actual executions after repinning this baseline.
+After repinning, all three gates must pass for unchanged code. `docs/RESULTS.md`
+records actual executions before and after PM repinning.
 The counter counts LF, CRLF and CR-only line endings, including mixed endings.
 Its default `:(icase)*.py` pathspec includes `.PY` and other case variants,
 excluding `tests/`. Blank and `#`-only lines are excluded.
 Counted files at the base commit and in the worktree with a non-UTF-8 encoding
 declaration in the first two lines are rejected with exit code 2 and their path.
+UTF-8 aliases and the tokenizer's `utf-8-*` names, including `utf-8-unix` and
+`utf-8-dos`, are allowed. Git color and column output are explicitly disabled;
+unparsed output from the declaration check returns exit 2.
 Removing the earlier `git grep -I` exclusion fixed the `.gitattributes`
 binary/`-diff` bypass; adding `-a` was not what fixed that omission.
 Non-ignored untracked Python files count, but nested untracked repositories,

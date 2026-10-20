@@ -51,7 +51,7 @@ describe the fixes and accepted limits by topic.
 | Windows batch execution | Fixed with intentional limits | Always double-quote the resolved `.cmd`/`.bat` path, including paths without spaces. Paths or arguments containing `& | < > ^ ( ) % ! "` or characters below U+0020 cause `launch_error`. Third-round fixes also reject trailing-dot and `\\?\` batch paths before execution. |
 | UTF-8 BOM configuration and adversarial module invocation | Fixed | Accept a leading BOM and support `python -m unittest tests.test_adversarial` from the repository root. |
 | Newline-parent regression on Windows | Intentional platform limit | Skip only this unsupported filesystem case on Windows; run it elsewhere. |
-| Debloat gate | Baseline repinned after the third-round fixes | `scripts/check_loc.py` keeps its default 20%; this repository uses 0% against `5e4471e9dc4a1d2d3559868abb151b3313c4c697`. |
+| Debloat gate | PM repins after each round of fixes | `scripts/check_loc.py` keeps its default 20%; this repository uses 0% against the commit pinned in `verification.json` (the latest review-fix commit). |
 | Original reverse interview | Recorded process issue | Accepted review-fix decisions are in `spec.md`; code cannot retroactively perform the original interview. |
 | Installed agents and PreToolUse hooks | Out of scope | Existing settings and instruction files remain unchanged. |
 | Filesystem race between checking and writing | Known limit | Rechecking and atomic replacement do not prevent TOCTOU races. |
@@ -117,6 +117,18 @@ the full 29-test deterministic suite passed. Mutation checks were not repeated
 against that integrated implementation. Current full-suite evidence is in
 `RESULTS.md`.
 
+## Fourth and fifth rounds: encoding-check fixes
+
+| Round | Change and evidence |
+| --- | --- |
+| Fourth | Reject non-UTF-8 declarations in the first two Python lines at both the base and worktree; update Git fixtures to seven calls. Restore effective batch-delimiter and planted-Git regression tests. |
+| Fifth | Disable Git color/column output and reject unparsed declaration-check output. Allow the tokenizer's `utf-8-*` names, including `utf-8-unix` and `utf-8-dos`. Regression tests cover local/temporary-global Git settings, declaration spellings, binary attributes and form-feed/vertical-tab indentation. |
+
+Descriptions of the current baseline refer to `verification.json` so PM repinning does
+not leave stale commit numbers. `RESULTS.md` records red/green runs, external
+mutation checks and reproduction results; these local checks do not replace an
+independent verification verdict.
+
 ## Verification
 
 Run from the repository root:
@@ -125,15 +137,15 @@ Run from the repository root:
 python3 -m unittest discover -s tests -v
 python3 scripts/verify.py --config verification.json
 python3 -m unittest tests.test_adversarial
-python3 scripts/check_loc.py --base 5e4471e9dc4a1d2d3559868abb151b3313c4c697 --min-percent 0
 ```
 
 The first post-fix run executed 22 tests with exit 0; this is historical evidence.
-`docs/RESULTS.md` records the actual post-commit executions against the third
-review-fix baseline, including both Windows environment variants for unittest.
+The harness uses the commit pinned in `verification.json` (the latest review-fix
+commit), with `--min-percent 0`. `docs/RESULTS.md` records actual executions,
+including both Windows environment variants for unittest.
 Use `python` on Windows. Both unittest commands and the
-harness must exit 0. The sample harness runs deterministic and
-adversarial test subsets separately, followed by the code line count check. A green
+harness must exit 0 after baseline repinning. The sample harness runs deterministic
+and adversarial test subsets separately, followed by the code line count check. A green
 third command is not a model simplification judgment or human approval.
 
 ## Debloating review
@@ -148,9 +160,9 @@ No debloating pass has happened yet. This repository alone uses a 0% minimum
 to reject growth against the pinned review-fix baseline; `check_loc.py` keeps
 its default 20%. A real debloating pass must raise the repository minimum to
 20% and compare against the preceding commit. The owner explicitly chose to
-prohibit growth relative to the fix commit. This update therefore repins the baseline
-to the PM's third review-fix commit, including those safety additions in the
-baseline rather than measuring them as a reduction.
+prohibit growth relative to the fix commit. The baseline is the commit pinned in
+`verification.json` (the latest review-fix commit), including those safety
+additions in the baseline rather than measuring them as a reduction.
 
 ## Residual limitations
 

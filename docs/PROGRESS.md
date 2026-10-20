@@ -4,9 +4,10 @@ Implementation and local regression tests exist on the local template branch.
 See `REVIEW.md` for provenance, the first independent verification FAIL,
 verifier2's PASS-WITH-NOTES and each finding's disposition.
 The PM committed the third-round fixes as
-`5e4471e9dc4a1d2d3559868abb151b3313c4c697`. This update repins the debloat baseline
-to that full SHA with `--min-percent 0`: the owner chose to prohibit growth
-relative to the fix commit, not to claim that safety fixes reduced code.
+`5e4471e9dc4a1d2d3559868abb151b3313c4c697`. The debloat baseline is the commit
+pinned in `verification.json` (the latest review-fix commit), with
+`--min-percent 0`. The PM repins it after each round; the owner chose to prohibit
+growth relative to the fix commit, not to claim that safety fixes reduced code.
 `RESULTS.md` records the three required commands and both unittest commands
 with `NoDefaultCurrentDirectoryInExePath` set to `1` and removed.
 Human merge approval remains pending.
@@ -33,13 +34,22 @@ Human merge approval remains pending.
   timeouts, option-like bases and tree/blob bases. All five corresponding
   mutations were detected before CR integration. The two affected fixtures
   now follow five Git calls; integrated mutation checks have not been repeated.
+- Fourth-round fixes reject non-UTF-8 declarations in the first two Python
+  lines at the base and worktree, and restore effective batch-delimiter and
+  planted-Git tests. The Git fixtures now cover seven calls.
+- Fifth-round fixes disable Git color/column output, reject unparsed
+  declaration-check output and allow the tokenizer's `utf-8-*` names.
+  New regressions cover local/temporary-global Git settings, declaration
+  spellings, binary attributes and form-feed/vertical-tab indentation.
+  `RESULTS.md` records red/green, mutation and reproduction evidence.
 
 Other JSON with the same LF prefix remains indistinguishable from a report.
 Nested untracked repositories and ignored files remain outside line counts.
 Root Python modules such as `unittest.py` can shadow standard-library modules
 in `python -m` gates; repository contents are trusted, not import-isolated.
-The TOCTOU race between checking and writing also remains. This update changes only
-configuration and documentation; it does not change `scripts/` or `tests/`.
+The TOCTOU race between checking and writing also remains. The fifth round
+changes the counter, regression tests and documentation; PM repinning and
+commits remain separate.
 
 The original CLAUDE.md and .claude/settings.json remain unchanged. Inactive role
 prompts live in docs/roles.md, not in an installed or activated agent setup.

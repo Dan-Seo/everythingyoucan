@@ -1,5 +1,6 @@
 """Debloat gate: fail unless code lines shrank by --min-percent since --base."""
 import argparse
+import codecs
 import re
 import subprocess
 import sys
@@ -13,15 +14,34 @@ CODE_LINE = "[ \t\v\f]*[^[:space:]#]"
 def count_code_lines(*grep_args):
     count = 0
     # -c counts LF lines; -o emits each CR-led code match on a separate output line.
-    for prefix, options in (("^", ("-z", "-c")),
+    for prefix, options in (("", ("-z", "-n", "-m", "2")),
+                            ("^", ("-z", "-c")),
                             ("\r", ("-h", "-o", "--no-break", "--no-heading"))):
         result = subprocess.run([_command_path("git"), "grep", "-a", *options, "-E", "-e",
-                                 prefix + CODE_LINE, *grep_args],
+                                 prefix + CODE_LINE if prefix else "^", *grep_args],
                                 stdout=subprocess.PIPE, timeout=60)
         if result.returncode not in (0, 1):
             raise OSError(f"git grep failed with exit code {result.returncode}")
-        count += (sum(int(n) for n in re.findall(rb"\0(\d+)\n", result.stdout))
-                  if prefix == "^" else result.stdout.count(b"\n"))
+        if not prefix:
+            headers = {}
+            for path, line in re.findall(rb"([^\0]+)\0[12]\0([^\n]*)\n", result.stdout):
+                headers[path] = headers.get(path, b"") + line + b"\n"
+            for path, header in headers.items():
+                for line in re.split(rb"\r\n?|\n", header.removeprefix(codecs.BOM_UTF8))[:2]:
+                    if not re.match(rb"[ \t\f]*(?:#|$)", line):
+                        break
+                    cookie = re.match(rb"[ \t\f]*#.*?coding[:=][ \t]*([-\w.]+)", line)
+                    if cookie:
+                        try:
+                            encoding = codecs.lookup(cookie[1].decode("ascii")).name
+                        except LookupError:
+                            encoding = None
+                        if encoding not in ("utf-8", "utf-8-sig"):
+                            raise ValueError("non-UTF-8 encoding declaration in "
+                                             + path.decode("utf-8", "replace"))
+        else:
+            count += (sum(int(n) for n in re.findall(rb"\0(\d+)\n", result.stdout))
+                      if prefix == "^" else result.stdout.count(b"\n"))
     return count
 
 

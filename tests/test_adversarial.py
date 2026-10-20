@@ -219,6 +219,56 @@ class LineCountAdversarialTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stderr)
         self.assertIn(b"code lines 100 at HEAD -> 600 now", result.stdout)
 
+    def test_non_utf8_encoding_cookies_cannot_hide_worktree_code(self):
+        payloads = {
+            "utf-7": b"+AAo-".join([b"x = 1"] * 100),
+            "unicode_escape": b"\\n".join([b"x = 1"] * 100),
+            "raw_unicode_escape": b"\\u000a".join([b"x = 1"] * 100),
+            "cp037": ("x = 1\n" * 100).encode("cp037"),
+        }
+        for encoding, payload in payloads.items():
+            for ending in (b"\n", b"\r\n", b"\r"):
+                for prefix in (b"", b"#!/usr/bin/env python" + ending):
+                    (self.root / "a.py").write_bytes(
+                        prefix + b"# coding: " + encoding.encode() + ending + payload + ending)
+                    result = subprocess.run([sys.executable, str(self.SCRIPT), "--base", "HEAD"],
+                                            cwd=self.root, capture_output=True, timeout=15)
+                    with self.subTest(encoding=encoding, ending=ending, prefix=prefix):
+                        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                        self.assertIn(b"a.py", result.stderr)
+                        self.assertIn(b"non-UTF-8", result.stderr)
+
+    def test_non_utf8_encoding_cookies_are_rejected_at_base(self):
+        (self.root / "a.py").write_bytes(b"# coding: utf-7\n" + b"x = 1+AAo-" * 100)
+        self.git("add", "a.py")
+        self.git("-c", "user.name=T", "-c", "user.email=t@example.invalid",
+                 "commit", "-q", "-m", "encoded base")
+        (self.root / "a.py").write_bytes(b"x = 1\n" * 80)
+        result = subprocess.run([sys.executable, str(self.SCRIPT), "--base", "HEAD"],
+                                cwd=self.root, capture_output=True, timeout=15)
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn(b"a.py", result.stderr)
+        self.assertIn(b"non-UTF-8", result.stderr)
+
+    def test_utf8_encoding_cookies_are_allowed(self):
+        for encoding in ("utf-8", "utf8", "UTF-8", "utf_8", "utf-8-sig"):
+            for prefix in (b"", b"#!/usr/bin/env python\n"):
+                (self.root / "a.py").write_bytes(
+                    prefix + b"# coding: " + encoding.encode() + b"\n" + b"x = 1\n" * 80)
+                result = subprocess.run([sys.executable, str(self.SCRIPT), "--base", "HEAD"],
+                                        cwd=self.root, capture_output=True, timeout=15)
+                with self.subTest(encoding=encoding, prefix=prefix):
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_encoding_cookies_after_second_line_are_ignored(self):
+        for ending in (b"\n", b"\r\n", b"\r"):
+            (self.root / "a.py").write_bytes(
+                ending * 2 + b"# coding: utf-7" + ending + (b"x = 1" + ending) * 80)
+            result = subprocess.run([sys.executable, str(self.SCRIPT), "--base", "HEAD"],
+                                    cwd=self.root, capture_output=True, timeout=15)
+            with self.subTest(ending=ending):
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_mixed_case_python_extensions_count_at_base_and_worktree(self):
         for name in ("BLOAT.PY", "Mixed.Py"):
             (self.root / name).write_text("y = 2\n" * 250)
@@ -269,6 +319,7 @@ sys.path.insert(0, sys.argv[1])
 script = sys.argv[2]
 sys.argv = [script, '--base', 'HEAD']
 outputs = [subprocess.CompletedProcess([], 0, stdout=b'a' * 40 + b'\n'),
+           subprocess.CompletedProcess([], 1, stdout=b''),
            subprocess.CompletedProcess([], 0, stdout=b'a.py\0' + b'9' * 5000 + b'\n')]
 with patch('subprocess.run', side_effect=outputs):
     runpy.run_path(script, run_name='__main__')
@@ -298,13 +349,15 @@ with patch('subprocess.run', side_effect=outputs):
 
     @unittest.skipUnless(sys.platform == "win32", "Windows executable lookup")
     def test_check_loc_git_ignores_caller_cwd(self):
-        shutil.copyfile(Path(os.environ["SystemRoot"]) / "System32" / "where.exe",
+        shutil.copyfile(Path(os.environ["SystemRoot"]) / "System32" / "cmd.exe",
                         self.root / "git.exe")
         env = {k: v for k, v in os.environ.items()
                if k.upper() != "NODEFAULTCURRENTDIRECTORYINEXEPATH"}
         result = subprocess.run([sys.executable, str(self.SCRIPT), "--base", "HEAD",
                                  "--min-percent", "0"], cwd=self.root, env=env,
+                                input=b"echo hijacked>planted-git-ran\r\nexit 0\r\n",
                                 capture_output=True, timeout=15)
+        self.assertFalse((self.root / "planted-git-ran").exists(), "the planted git.exe ran")
         self.assertEqual(result.returncode, 0, result.stderr)
 
 
@@ -514,21 +567,25 @@ class WindowsAdversarialTests(unittest.TestCase):
         self.assertEqual(report["gates"][0]["status"], "launch_error")
 
     def test_batch_path_delimiters_cannot_select_a_sibling(self):
-        (self.root / "tool.bat").write_text("@exit /b 9\n")
+        directory = tempfile.TemporaryDirectory(prefix="verify-delimiters-")
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        self.assertFalse(any(char.isspace() for char in str(root)), str(root))
+        (root / "tool.bat").write_text("@exit /b 9\n")
         delimiters = ",;=" + "".join(chr(n) for n in range(32, sys.maxunicode + 1)
                                       if chr(n).isspace())
         previous = Path.cwd()
         try:
-            os.chdir(self.root)
+            os.chdir(root)
             for extension in (".cmd", ".bat"):
                 for delimiter in delimiters:
-                    tool = self.root / ("tool" + delimiter + "lint" + extension)
+                    tool = root / ("tool" + delimiter + "lint" + extension)
                     tool.write_text("@exit /b 0\n")
                     for args in ([], ["hello world"]):
                         value = config()
                         value["gates"][0]["argv"] = [os.path.join(".", tool.name), *args]
                         with self.subTest(extension=extension, delimiter=repr(delimiter), args=args):
-                            report = verify.run_gates(value, self.root)
+                            report = verify.run_gates(value, root)
                             self.assertEqual(report["status"], "passed")
         finally:
             os.chdir(previous)

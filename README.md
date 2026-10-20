@@ -84,12 +84,14 @@ actual executions after repinning this baseline.
 The counter counts LF, CRLF and CR-only line endings, including mixed endings.
 Its default `:(icase)*.py` pathspec includes `.PY` and other case variants,
 excluding `tests/`. Blank and `#`-only lines are excluded.
+Counted files at the base commit and in the worktree with a non-UTF-8 encoding
+declaration in the first two lines are rejected with exit code 2 and their path.
 Removing the earlier `git grep -I` exclusion fixed the `.gitattributes`
 binary/`-diff` bypass; adding `-a` was not what fixed that omission.
 Non-ignored untracked Python files count, but nested untracked repositories,
-ignored files and excluded paths do not. Git execution, timeout and
-output-parsing errors (including decoding and numeric conversion) exit with
-code 2; grep failures also print a diagnostic containing the exit code.
+ignored files and excluded paths do not. Git execution, timeout, decoding and
+numeric-conversion errors exit with code 2; grep failures also print a diagnostic
+containing the exit code. Unmatched LF count output contributes zero lines.
 
 ## Trust boundaries
 

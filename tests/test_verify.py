@@ -245,21 +245,25 @@ class LineCountGateTests(unittest.TestCase):
     def test_worktree_git_grep_failure_is_execution_error(self):
         with patch.object(subprocess, "run", side_effect=[
                 subprocess.CompletedProcess([], 0, stdout=b"base\n"),
+                subprocess.CompletedProcess([], 1, stdout=b""),
                 subprocess.CompletedProcess([], 0, stdout=b"base:scripts/a.py\0" + b"10\n"),
+                subprocess.CompletedProcess([], 1, stdout=b""),
                 subprocess.CompletedProcess([], 1, stdout=b""),
                 subprocess.CompletedProcess([], 128, stdout=b"")]) as git:
             self.assertEqual(self.run_gate_in_process("--base", "HEAD"), 2)
-        self.assertEqual(git.call_count, 4)
+        self.assertEqual(git.call_count, 6)
         self.assertEqual(git.call_args_list[1].args[0][1], "grep")
-        self.assertIn("--untracked", git.call_args_list[3].args[0])
+        self.assertIn("--untracked", git.call_args_list[5].args[0])
 
     def test_git_timeouts_are_execution_errors(self):
         successful = [
             subprocess.CompletedProcess([], 0, stdout=b"base\n"),
+            subprocess.CompletedProcess([], 1, stdout=b""),
             subprocess.CompletedProcess([], 0, stdout=b"base:scripts/a.py\0" + b"10\n"),
             subprocess.CompletedProcess([], 1, stdout=b""),
+            subprocess.CompletedProcess([], 1, stdout=b""),
             subprocess.CompletedProcess([], 0, stdout=b"scripts/a.py\0" + b"10\n")]
-        for index in range(5):
+        for index in range(7):
             with self.subTest(git_call=index), patch.object(subprocess, "run", side_effect=[
                     *successful[:index], subprocess.TimeoutExpired("git", 0.01)]) as git:
                 self.assertEqual(self.run_gate_in_process("--base", "HEAD"), 2)

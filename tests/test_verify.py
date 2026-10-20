@@ -2,6 +2,7 @@ import copy
 import importlib.util
 import json
 from pathlib import Path
+import runpy
 import subprocess
 import sys
 import tempfile
@@ -115,6 +116,22 @@ class RunnerTests(unittest.TestCase):
                 report = verify.run_gates(value, directory)
         self.assertEqual(report["gates"][0]["status"], "passed")
 
+    @unittest.skipUnless(sys.platform == "win32", "Windows batch execution")
+    def test_uppercase_batch_found_by_name_rejects_unsafe_arguments(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "tool.CMD").write_text("@rem inert tool\n")
+            value = config()
+            value["gates"][0]["argv"] = ["tool", "x&echo,INJECTED>INJECTED"]
+            with patch.dict(verify.os.environ, {
+                    "PATH": directory, "PATHEXT": ".COM;.EXE;.BAT;.CMD"}):
+                self.assertEqual(Path(verify._command_path("tool")).suffix, ".CMD")
+                report = verify.run_gates(value, root)
+            self.assertEqual(report["gates"][0]["status"], "launch_error")
+            self.assertIsNone(report["gates"][0]["exit_code"])
+            self.assertEqual(report["gates"][1]["status"], "not_run")
+            self.assertFalse((root / "INJECTED").exists())
+
     def test_report_roundtrip(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "nested" / "report.json"
@@ -217,6 +234,56 @@ class LineCountGateTests(unittest.TestCase):
     def run_gate(self, *args):
         return subprocess.run([sys.executable, str(self.SCRIPT), *args], cwd=self.root,
                               capture_output=True, timeout=15).returncode
+
+    def run_gate_in_process(self, *args):
+        with patch.dict(sys.modules, {"verify": verify}), \
+                patch.object(sys, "argv", [str(self.SCRIPT), *args]), \
+                self.assertRaises(SystemExit) as exit:
+            runpy.run_path(str(self.SCRIPT), run_name="__main__")
+        return exit.exception.code
+
+    def test_worktree_git_grep_failure_is_execution_error(self):
+        with patch.object(subprocess, "run", side_effect=[
+                subprocess.CompletedProcess([], 0, stdout=b"base\n"),
+                subprocess.CompletedProcess([], 0, stdout=b"base:scripts/a.py\0" + b"10\n"),
+                subprocess.CompletedProcess([], 1, stdout=b""),
+                subprocess.CompletedProcess([], 128, stdout=b"")]) as git:
+            self.assertEqual(self.run_gate_in_process("--base", "HEAD"), 2)
+        self.assertEqual(git.call_count, 4)
+        self.assertEqual(git.call_args_list[1].args[0][1], "grep")
+        self.assertIn("--untracked", git.call_args_list[3].args[0])
+
+    def test_git_timeouts_are_execution_errors(self):
+        successful = [
+            subprocess.CompletedProcess([], 0, stdout=b"base\n"),
+            subprocess.CompletedProcess([], 0, stdout=b"base:scripts/a.py\0" + b"10\n"),
+            subprocess.CompletedProcess([], 1, stdout=b""),
+            subprocess.CompletedProcess([], 0, stdout=b"scripts/a.py\0" + b"10\n")]
+        for index in range(5):
+            with self.subTest(git_call=index), patch.object(subprocess, "run", side_effect=[
+                    *successful[:index], subprocess.TimeoutExpired("git", 0.01)]) as git:
+                self.assertEqual(self.run_gate_in_process("--base", "HEAD"), 2)
+                self.assertEqual(git.call_count, index + 1)
+                self.assertGreater(git.call_args.kwargs["timeout"], 0)
+
+    def test_option_like_base_is_rejected_after_end_of_options(self):
+        run = subprocess.run
+        with patch.object(subprocess, "run",
+                          side_effect=lambda argv, **kwargs: run(
+                              argv, cwd=self.root, **kwargs)) as git:
+            self.assertEqual(self.run_gate_in_process("--base=--help"), 2)
+        # The commit suffix also rejects this value, so check option termination explicitly.
+        self.assertEqual(git.call_args_list[0].args[0][-2:],
+                         ["--end-of-options", "--help^{commit}"])
+
+    def test_tree_and_blob_base_shas_are_rejected(self):
+        self.write(1)
+        for ref in ("HEAD^{tree}", "HEAD:scripts/a.py"):
+            with self.subTest(ref=ref):
+                sha = subprocess.run([verify._command_path("git"), "rev-parse", ref],
+                                     cwd=self.root, check=True, capture_output=True,
+                                     timeout=15).stdout.decode("ascii").strip()
+                self.assertEqual(self.run_gate("--base", sha), 2)
 
     def test_requires_default_twenty_percent_reduction_of_code_lines(self):
         self.write(9)

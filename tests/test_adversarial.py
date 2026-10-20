@@ -193,6 +193,50 @@ class LineCountAdversarialTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn(b"code lines 100 at HEAD -> 100 now", result.stdout)
 
+    def test_python_line_endings_count_equally_in_worktree(self):
+        lines = [b"", b" \t", b"  # comment", b"x = 1", b"y = 2 # inline"] * 300
+        endings = (b"\n", b"\r\n", b"\r")
+        sources = [ending.join(lines) for ending in endings]
+        sources.append(b"".join(line + endings[index % 3]
+                                for index, line in enumerate(lines)))
+        for index, source in enumerate(sources):
+            compile(source, "a.py", "exec")
+            (self.root / "a.py").write_bytes(source)
+            result = subprocess.run([sys.executable, str(self.SCRIPT), "--base", "HEAD"],
+                                    cwd=self.root, capture_output=True, timeout=15)
+            with self.subTest(index=index):
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn(b"code lines 100 at HEAD -> 600 now", result.stdout)
+
+    def test_cr_only_base_code_is_counted(self):
+        (self.root / "a.py").write_bytes(b"\r".join([b"# comment", b"x = 1", b""] * 100))
+        self.git("-c", "core.autocrlf=false", "add", "a.py")
+        self.git("-c", "user.name=T", "-c", "user.email=t@example.invalid",
+                 "commit", "-q", "-m", "CR-only base")
+        (self.root / "a.py").write_bytes(b"x = 1\n" * 600)
+        result = subprocess.run([sys.executable, str(self.SCRIPT), "--base", "HEAD"],
+                                cwd=self.root, capture_output=True, timeout=15)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn(b"code lines 100 at HEAD -> 600 now", result.stdout)
+
+    def test_mixed_case_python_extensions_count_at_base_and_worktree(self):
+        for name in ("BLOAT.PY", "Mixed.Py"):
+            (self.root / name).write_text("y = 2\n" * 250)
+        (self.root / "tests").mkdir()
+        (self.root / "tests" / "EXCLUDED.PY").write_text("z = 3\n" * 500)
+        for tracked in (False, True):
+            if tracked:
+                self.git("add", ".")
+                self.git("-c", "user.name=T", "-c", "user.email=t@example.invalid",
+                         "commit", "-q", "-m", "mixed case extensions")
+            result = subprocess.run([sys.executable, str(self.SCRIPT), "--base", "HEAD",
+                                     "--min-percent", "0"], cwd=self.root,
+                                    capture_output=True, timeout=15)
+            with self.subTest(tracked=tracked):
+                self.assertEqual(result.returncode, 0 if tracked else 1, result.stderr)
+                expected = b"code lines 600" if tracked else b"code lines 100"
+                self.assertIn(expected + b" at HEAD -> 600 now", result.stdout)
+
     def test_non_utf8_git_output_is_execution_error(self):
         bindir = self.root / "bin"; bindir.mkdir()
         if sys.platform == "win32":
@@ -215,6 +259,41 @@ class LineCountAdversarialTests(unittest.TestCase):
         result = subprocess.run([sys.executable, str(self.SCRIPT), "--base", "HEAD"],
                                 cwd=self.root, env=env, capture_output=True, timeout=15)
         self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertNotIn(b"Traceback", result.stderr)
+
+    def test_extreme_git_count_is_execution_error(self):
+        result = subprocess.run([sys.executable, "-c", r"""
+import runpy, subprocess, sys
+from unittest.mock import patch
+sys.path.insert(0, sys.argv[1])
+script = sys.argv[2]
+sys.argv = [script, '--base', 'HEAD']
+outputs = [subprocess.CompletedProcess([], 0, stdout=b'a' * 40 + b'\n'),
+           subprocess.CompletedProcess([], 0, stdout=b'a.py\0' + b'9' * 5000 + b'\n')]
+with patch('subprocess.run', side_effect=outputs):
+    runpy.run_path(script, run_name='__main__')
+""", str(self.SCRIPT.parent), str(self.SCRIPT)], cwd=self.root,
+                                capture_output=True, timeout=15)
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn(b"debloat gate:", result.stderr)
+        self.assertNotIn(b"Traceback", result.stderr)
+
+    def test_git_grep_failure_has_diagnostic(self):
+        result = subprocess.run([sys.executable, "-c", r"""
+import runpy, subprocess, sys
+from unittest.mock import patch
+sys.path.insert(0, sys.argv[1])
+script = sys.argv[2]
+sys.argv = [script, '--base', 'HEAD']
+outputs = [subprocess.CompletedProcess([], 0, stdout=b'a' * 40 + b'\n'),
+           subprocess.CompletedProcess([], 128, stdout=b'')]
+with patch('subprocess.run', side_effect=outputs):
+    runpy.run_path(script, run_name='__main__')
+""", str(self.SCRIPT.parent), str(self.SCRIPT)], cwd=self.root,
+                                capture_output=True, timeout=15)
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn(b"git grep", result.stderr)
+        self.assertIn(b"128", result.stderr)
         self.assertNotIn(b"Traceback", result.stderr)
 
     @unittest.skipUnless(sys.platform == "win32", "Windows executable lookup")
@@ -322,6 +401,31 @@ class WindowsAdversarialTests(unittest.TestCase):
         self.assertEqual(report["gates"][0]["status"], "launch_error")
         self.assertEqual(report["gates"][1]["status"], "not_run")
 
+    def test_relative_executable_uses_repository_root(self):
+        caller = self.root / "caller"; (caller / "bin").mkdir(parents=True)
+        (self.root / "bin").mkdir()
+        system = Path(os.environ["SystemRoot"]) / "System32"
+        shutil.copyfile(system / "where.exe", self.root / "bin" / "tool.exe")
+        shutil.copyfile(system / "cmd.exe", caller / "bin" / "tool.exe")
+        previous = Path.cwd()
+        for setting in (None, "1"):
+            marker = self.root / f"hijacked-{setting}"
+            value = config()
+            value["gates"][0]["argv"] = [os.path.join("bin", "tool.exe"), "/c",
+                                         f"echo hijacked>{marker.name}"]
+            with self.subTest(setting=setting), patch.dict(os.environ):
+                os.environ.pop("NoDefaultCurrentDirectoryInExePath", None)
+                if setting is not None:
+                    os.environ["NoDefaultCurrentDirectoryInExePath"] = setting
+                try:
+                    os.chdir(caller)
+                    report = verify.run_gates(value, self.root)
+                finally:
+                    os.chdir(previous)
+                self.assertFalse(marker.exists(), "the caller's relative executable ran")
+                self.assertEqual(report["gates"][0]["status"], "failed")
+                self.assertEqual(report["gates"][1]["status"], "not_run")
+
     def test_git_metadata_query_ignores_caller_cwd(self):
         subprocess.run([verify._command_path("git"), "init", "-q", str(self.root)], check=True, timeout=10)
         caller = self.root / "caller"; caller.mkdir()
@@ -383,6 +487,21 @@ class WindowsAdversarialTests(unittest.TestCase):
             with self.subTest(suffix=suffix):
                 self.assertFalse(marker.exists(), "a batch path alias allowed injection")
                 self.assertEqual(report["gates"][0]["status"], "launch_error")
+
+    def test_unsupported_batch_paths_are_rejected_before_launch(self):
+        for extension in (".cmd", ".BAT"):
+            tool = self.root / ("tool" + extension); tool.write_text("@exit /b 0\n")
+            commands = [str(tool) + suffix for suffix in (".", ". .")]
+            commands.append("\\\\?\\" + str(tool))
+            for command in commands:
+                value = config(); value["gates"][0]["argv"] = [command]
+                with self.subTest(command=command), patch.object(
+                        verify.subprocess, "run", wraps=subprocess.run) as run:
+                    report = verify.run_gates(value, self.root)
+                    self.assertEqual(report["gates"][0]["status"], "launch_error")
+                    self.assertIsNone(report["gates"][0]["exit_code"])
+                    self.assertEqual(report["gates"][1]["status"], "not_run")
+                    run.assert_not_called()
 
     def test_batch_executable_path_cannot_expand_environment_variables(self):
         tool = self.root / "tool%VERIFY_INJECTION%.cmd"; tool.write_text("@exit /b 0\n")

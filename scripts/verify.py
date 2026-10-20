@@ -123,10 +123,15 @@ def run_gates(config, root):
         if not blocked:
             argv = [sys.executable if arg == "{python}" else arg for arg in gate["argv"]]
             try:
-                argv[0] = _command_path(argv[0])
+                if os.path.dirname(argv[0]):
+                    argv[0] = str((Path(root) / argv[0]).absolute())
+                else:
+                    argv[0] = _command_path(argv[0])
                 # Windows implicitly runs batch files through cmd.exe even with shell=False.
                 if (sys.platform == "win32"
                         and Path(argv[0].rstrip(" .")).suffix.casefold() in (".cmd", ".bat")):
+                    if argv[0].rstrip(" ").endswith(".") or argv[0].startswith("\\\\?\\"):
+                        raise OSError("unsupported Windows batch path")
                     if any(char in '&|<>^()%!"' or ord(char) < 32
                            for arg in argv for char in arg):
                         raise OSError("unsafe Windows batch command or argument")

@@ -1,8 +1,50 @@
 # everythingyoucan
 
-A dependency-free Python starter for the design → implement → verify → human
-review workflow described in the original `CLAUDE.md`. This is a template, not an
-application, a sandbox, a security certification or an autonomous merge system.
+**Ship AI-written Python through a verification funnel, not vibes.**
+
+- **What:** a dependency-free Python starter for the design → implement → verify → human-review workflow in [`CLAUDE.md`](CLAUDE.md).
+- **Who:** developers using Claude Code (or any coding agent) who want executable gates before they trust generated code.
+- **How:** copy the spec template, implement, then run the 3-gate harness — deterministic tests, adversarial regressions, LOC check — and ask a human for merge approval.
+
+```sh
+python3 -m unittest discover -s tests && python3 scripts/verify.py --config verification.json
+```
+
+83 committed tests, zero third-party dependencies — `python3 -m unittest discover -s tests` reports `Ran 83 tests ... OK` with stdlib only. This is a template, not an application, a sandbox, a security certification or an autonomous merge system.
+
+## Why this exists
+
+Coding agents generate code fast; the bottleneck is trusting it. `CLAUDE.md` prompt templates tell the agent *what to do*, but markdown alone cannot stop a bad merge. This starter adds the missing half: an executable funnel (`scripts/verify.py` + `verification.json`) that runs deterministic tests, adversarial regression tests, and a code-size check in order, fails fast, and always leaves `human_approval: pending` for a person to resolve. Every gate exit code and limitation is documented in [`docs/REVIEW.md`](docs/REVIEW.md) and [`docs/RESULTS.md`](docs/RESULTS.md).
+
+## When to use (and when not to)
+
+Use it when you want a spec-first, agent-assisted Python workflow with no toolchain to install — Python 3.10+ and Git are the only prerequisites. It fits small libraries, scripts, and exercises where hostile inputs and silent regressions matter.
+
+Do not use it as a sandbox, a security certification, or an auto-merge bot: configured commands run with your account's permissions, reports are unsigned local evidence, and no script here pushes, merges, deploys, or calls a model. See [Trust boundaries](#trust-boundaries).
+
+## How it compares
+
+- [CLAUDE.md template collections](https://github.com/abhishekray07/claude-md-templates) and [production CLAUDE.md templates](https://github.com/seankim-android/claude-md-templates) give you markdown rules to copy; this repo adds an executable 3-gate runner and 83 committed tests, not just instructions.
+- [Claude Code starter setups](https://github.com/centminmod/my-claude-code-setup) configure memory banks and settings; this repo is a per-project workflow template with a human-approval gate and measured evidence docs.
+- [Mini-harness tutorials](https://github.com/truongpx396/learn-harness-engineering-by-building-mini-claude-code) teach agent-loop engineering but require model SDKs and API keys; this repo runs offline on the standard library.
+- [Minimal Python cookiecutters](https://github.com/Techcable/cookiecutter-python-minimal) scaffold packaging (setuptools, linters); this repo scaffolds the design → implement → verify loop instead, with no packaging files at all.
+
+## FAQ
+
+**Does it really have zero dependencies?**
+Yes. There is no `pyproject.toml`, `setup.py`, or `requirements.txt`; every import in `scripts/` and `tests/` is from the Python standard library. Check with `grep -rh "^import \|^from " scripts/ tests/ | sort -u`.
+
+**What do the three gates check?**
+`deterministic` runs the unit suite, `critic` runs the adversarial regression suite, and `debloat` runs `scripts/check_loc.py` to reject code growth versus the pinned base commit. The runner stops after the first failing gate.
+
+**Why does the report always say `human_approval: pending`?**
+Because passing gates mean "ready for human review", never "approved". A person still checks spec conformance and merges. Software in this repo cannot grant approval.
+
+**Does it work on Windows?**
+Yes, with `python` instead of `python3`. The review-fix stage runs the suite on Windows too; Windows-specific path and executable-lookup regressions run there, while the newline-filename regression is skipped (Windows filenames cannot contain newlines). macOS has not been tested.
+
+**Where do I start a new task?**
+Copy `specs/TEMPLATE_spec.md`, fill in goals and acceptance tests, implement, then point the gate commands at your real checks. See [Work on a new task](#work-on-a-new-task).
 
 ## Quick start
 
